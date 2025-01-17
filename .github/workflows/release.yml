@@ -83,6 +83,7 @@ jobs:
         env:
           YAAK_PLUGINS_DIR: ${{ env.YAAK_PLUGINS_DIR }}
           YAAK_TARGET_ARCH: ${{ matrix.yaak_arch }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
         with:
           tagName: 'v__VERSION__'
