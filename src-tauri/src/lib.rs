@@ -1806,8 +1806,8 @@ pub fn run() {
             create_dir_all(app_data_dir.clone()).expect("Problem creating App directory!");
 
             // Add updater
-            let yaak_updater = YaakUpdater::new();
-            app.manage(Mutex::new(yaak_updater));
+            //let yaak_updater = YaakUpdater::new();
+            //app.manage(Mutex::new(yaak_updater));
 
             // Add notifier
             let yaak_notifier = YaakNotifier::new();
