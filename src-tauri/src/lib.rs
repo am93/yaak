@@ -9,8 +9,6 @@ use crate::render::{render_grpc_request, render_http_request, render_json_value,
 use crate::template_callback::PluginTemplateCallback;
 use crate::updates::{UpdateMode, YaakUpdater};
 use crate::window_menu::app_menu;
-use base64::prelude::BASE64_STANDARD;
-use base64::Engine;
 use chrono::Utc;
 use eventsource_client::{EventParser, SSE};
 use log::{debug, error, info, warn};
@@ -34,6 +32,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_log::fern::colors::ColoredLevelConfig;
 use tauri_plugin_log::{Builder, Target, TargetKind};
 use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
 use tokio::fs::read_to_string;
 use tokio::sync::Mutex;
 use tokio::task::block_in_place;
@@ -64,11 +63,11 @@ use yaak_models::queries::{
     upsert_workspace_meta, BatchUpsertResult, UpdateSource,
 };
 use yaak_plugins::events::{
-    BootResponse, CallHttpRequestActionRequest, FilterResponse, FindHttpResponsesResponse,
-    GetHttpRequestActionsResponse, GetHttpRequestByIdResponse, GetTemplateFunctionsResponse, Icon,
-    InternalEvent, InternalEventPayload, PromptTextResponse, RenderHttpRequestResponse,
-    RenderPurpose, SendHttpRequestResponse, ShowToastRequest, TemplateRenderResponse,
-    WindowContext,
+    BootResponse, CallHttpAuthenticationRequest, CallHttpRequestActionRequest, FilterResponse,
+    FindHttpResponsesResponse, GetHttpAuthenticationResponse, GetHttpRequestActionsResponse,
+    GetHttpRequestByIdResponse, GetTemplateFunctionsResponse, HttpHeader, Icon, InternalEvent,
+    InternalEventPayload, PromptTextResponse, RenderHttpRequestResponse, RenderPurpose,
+    SendHttpRequestResponse, ShowToastRequest, TemplateRenderResponse, WindowContext,
 };
 use yaak_plugins::manager::PluginManager;
 use yaak_plugins::plugin_handle::PluginHandle;
@@ -197,6 +196,7 @@ async fn cmd_grpc_go<R: Runtime>(
     environment_id: Option<&str>,
     proto_files: Vec<String>,
     window: WebviewWindow<R>,
+    plugin_manager: State<'_, PluginManager>,
     grpc_handle: State<'_, Mutex<GrpcHandle>>,
 ) -> Result<String, String> {
     let environment = match environment_id {
@@ -209,7 +209,7 @@ async fn cmd_grpc_go<R: Runtime>(
         .ok_or("Failed to find GRPC request")?;
     let base_environment =
         get_base_environment(&window, &req.workspace_id).await.map_err(|e| e.to_string())?;
-    let req = render_grpc_request(
+    let mut req = render_grpc_request(
         &req,
         &base_environment,
         environment.as_ref(),
@@ -235,21 +235,37 @@ async fn cmd_grpc_go<R: Runtime>(
         metadata.insert(h.name, h.value);
     }
 
-    if let Some(b) = &req.authentication_type {
-        let req = req.clone();
-        let empty_value = &serde_json::to_value("").unwrap();
-        let a = req.authentication;
+    // Map legacy auth name values from before they were plugins
+    let auth_plugin_name = match req.authentication_type.clone() {
+        Some(s) if s == "basic" => Some("@yaakapp/auth-basic".to_string()),
+        Some(s) if s == "bearer" => Some("@yaakapp/auth-bearer".to_string()),
+        _ => req.authentication_type.to_owned(),
+    };
+    if let Some(plugin_name) = auth_plugin_name {
+        let plugin_req = CallHttpAuthenticationRequest {
+            config: serde_json::to_value(&req.authentication)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .to_owned(),
+            method: "POST".to_string(),
+            url: req.url.clone(),
+            headers: metadata
+                .iter()
+                .map(|(name, value)| HttpHeader {
+                    name: name.to_string(),
+                    value: value.to_string(),
+                })
+                .collect(),
+        };
+        let plugin_result = plugin_manager
+            .call_http_authentication(&window, &plugin_name, plugin_req)
+            .await
+            .map_err(|e| e.to_string())?;
 
-        if b == "basic" {
-            let username = a.get("username").unwrap_or(empty_value).as_str().unwrap_or("");
-            let password = a.get("password").unwrap_or(empty_value).as_str().unwrap_or("");
-
-            let auth = format!("{username}:{password}");
-            let encoded = BASE64_STANDARD.encode(auth);
-            metadata.insert("Authorization".to_string(), format!("Basic {}", encoded));
-        } else if b == "bearer" {
-            let token = a.get("token").unwrap_or(empty_value).as_str().unwrap_or("");
-            metadata.insert("Authorization".to_string(), format!("Bearer {token}"));
+        req.url = plugin_result.url;
+        for header in plugin_result.headers {
+            metadata.insert(header.name, header.value);
         }
     }
 
@@ -957,6 +973,14 @@ async fn cmd_template_functions<R: Runtime>(
     plugin_manager: State<'_, PluginManager>,
 ) -> Result<Vec<GetTemplateFunctionsResponse>, String> {
     plugin_manager.get_template_functions(&window).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn cmd_get_http_authentication<R: Runtime>(
+    window: WebviewWindow<R>,
+    plugin_manager: State<'_, PluginManager>,
+) -> Result<Vec<GetHttpAuthenticationResponse>, String> {
+    plugin_manager.get_http_authentication(&window).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1850,6 +1874,7 @@ pub fn run() {
             cmd_get_environment,
             cmd_get_folder,
             cmd_get_grpc_request,
+            cmd_get_http_authentication,
             cmd_get_http_request,
             cmd_get_key_value,
             cmd_get_settings,
@@ -1948,6 +1973,21 @@ pub fn run() {
                 }
                 _ => {}
             };
+
+            // Save window state on exit
+            match event {
+                RunEvent::WindowEvent {
+                    event: WindowEvent::CloseRequested { .. },
+                    ..
+                } => {
+                    if let Err(e) = app_handle.save_window_state(StateFlags::all()) {
+                        warn!("Failed to save window state {e:?}");
+                    } else {
+                        debug!("Saved window state");
+                    };
+                }
+                _ => {}
+            };
         });
 }
 
@@ -1984,7 +2024,19 @@ fn create_main_window(handle: &AppHandle, url: &str) -> WebviewWindow {
             100.0 + random::<f64>() * 20.0,
         ),
     };
-    create_window(handle, config)
+
+    let window = create_window(handle, config);
+
+    // Restore window state if it's a main window
+    if !label.starts_with(OTHER_WINDOW_PREFIX) {
+        if let Err(e) = window.restore_state(StateFlags::all()) {
+            warn!("Failed to restore window state {e:?}");
+        } else {
+            debug!("Restored window state");
+        }
+    }
+
+    window
 }
 
 struct CreateWindowConfig<'s> {
@@ -2245,7 +2297,7 @@ async fn handle_plugin_event<R: Runtime>(
                 render_json_value(req.data, &base_environment, environment.as_ref(), &cb).await;
             Some(InternalEventPayload::TemplateRenderResponse(TemplateRenderResponse { data }))
         }
-        InternalEventPayload::ReloadResponse => {
+        InternalEventPayload::ReloadResponse(_) => {
             let window = get_window_from_window_context(app_handle, &window_context)
                 .expect("Failed to find window for plugin reload");
             let plugins = list_plugins(app_handle).await.unwrap();
