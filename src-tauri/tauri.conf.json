@@ -21,6 +21,11 @@
       }
     }
   },
+  "tauri": {
+    "updater": {
+      "active": false
+    }
+  },
   "plugins": {
     "deep-link": {
       "mobile": [],
@@ -34,6 +39,9 @@
        "active": false
     }
   },
+  "updater": {
+    "active": false
+  }
   "bundle": {
     "publisher": "Yaak",
     "license": "MIT",
