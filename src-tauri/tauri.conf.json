@@ -21,11 +21,6 @@
       }
     }
   },
-  "tauri": {
-    "updater": {
-      "active": false
-    }
-  },
   "plugins": {
     "deep-link": {
       "mobile": [],
@@ -34,13 +29,7 @@
           "yaak"
         ]
       }
-    },
-    "updater": {
-       "active": false
     }
-  },
-  "updater": {
-    "active": false
   },
   "bundle": {
     "publisher": "Yaak",
