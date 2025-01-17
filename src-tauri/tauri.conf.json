@@ -41,7 +41,7 @@
   },
   "updater": {
     "active": false
-  }
+  },
   "bundle": {
     "publisher": "Yaak",
     "license": "MIT",
