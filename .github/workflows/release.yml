@@ -96,3 +96,5 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+          includeDebug: true
+          includeRelease: false
