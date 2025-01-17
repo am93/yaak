@@ -1701,8 +1701,7 @@ async fn cmd_check_for_updates(
     app_handle: AppHandle,
     yaak_updater: State<'_, Mutex<YaakUpdater>>,
 ) -> Result<bool, String> {
-    let update_mode = get_update_mode(&app_handle).await;
-    yaak_updater.lock().await.force_check(&app_handle, update_mode).await.map_err(|e| e.to_string())
+    Ok(false)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1824,7 +1823,6 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             cmd_call_http_request_action,
-            cmd_check_for_updates,
             cmd_create_cookie_jar,
             cmd_create_environment,
             cmd_create_grpc_request,
