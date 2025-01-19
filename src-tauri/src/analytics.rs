@@ -111,7 +111,7 @@ pub async fn track_launch_event<R: Runtime>(w: &WebviewWindow<R>) -> LaunchEvent
     info.previous_version = get_key_value_string(w, NAMESPACE, last_tracked_version_key, "").await;
     info.current_version = w.package_info().version.to_string();
 
-    if info.previous_version.is_empty() {
+    /*if info.previous_version.is_empty() {
         track_event(w, AnalyticsResource::App, AnalyticsAction::LaunchFirst, None).await;
     } else {
         info.launched_after_update = info.current_version != info.previous_version;
@@ -147,7 +147,7 @@ pub async fn track_launch_event<R: Runtime>(w: &WebviewWindow<R>) -> LaunchEvent
     .await;
     set_key_value_int(w, NAMESPACE, NUM_LAUNCHES_KEY, info.num_launches, &UpdateSource::Background)
         .await;
-
+    */
     info
 }
 
@@ -157,7 +157,7 @@ pub async fn track_event<R: Runtime>(
     action: AnalyticsAction,
     attributes: Option<Value>,
 ) {
-    let id = get_id(w).await;
+    /*let id = get_id(w).await;
     let event = format!("{}.{}", resource, action);
     let attributes_json = attributes.unwrap_or("{}".to_string().into()).to_string();
     let info = w.app_handle().package_info();
@@ -198,6 +198,8 @@ pub async fn track_event<R: Runtime>(
     if let Err(e) = req.send().await {
         info!("Error sending analytics event: {}", e);
     }
+    */
+    return;
 }
 
 fn get_os() -> &'static str {
