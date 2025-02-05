@@ -44,7 +44,6 @@ export type DropdownItemSeparator = {
 };
 
 export type DropdownItemDefault = {
-  key: string;
   type?: 'default';
   label: ReactNode;
   keepOpen?: boolean;
@@ -122,8 +121,8 @@ export const Dropdown = forwardRef<DropdownRef, DropdownProps>(function Dropdown
   // we have of detecting the dropdown closed, to do cleanup.
   useEffect(() => {
     if (!isOpen) {
-      buttonRef.current?.focus(); // Focus button
-      buttonRef.current!.style.backgroundColor = ''; // Clear persisted BG
+      // Clear persisted BG
+      buttonRef.current!.style.backgroundColor = '';
       // Set to different value when opened and closed to force it to update. This is to force
       // <Menu/> to reset its selected-index state, which it does when this prop changes
       setDefaultSelectedIndex(null);
@@ -465,11 +464,12 @@ const Menu = forwardRef<Omit<DropdownRef, 'open' | 'isOpen' | 'toggle' | 'items'
     return (
       <>
         {items.map(
-          (item) =>
+          (item, i) =>
             item.type !== 'separator' &&
-            !item.hotKeyLabelOnly && (
+            !item.hotKeyLabelOnly &&
+            item.hotKeyAction && (
               <MenuItemHotKey
-                key={item.key}
+                key={`${item.hotKeyAction}::${i}`}
                 onSelect={handleSelect}
                 item={item}
                 action={item.hotKeyAction}
@@ -542,7 +542,7 @@ const Menu = forwardRef<Omit<DropdownRef, 'open' | 'isOpen' | 'toggle' | 'items'
                       focused={i === selectedIndex}
                       onFocus={handleFocus}
                       onSelect={handleSelect}
-                      key={item.key}
+                      key={`item_${i}`}
                       item={item}
                     />
                   );

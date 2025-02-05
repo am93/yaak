@@ -88,11 +88,13 @@ jobs:
         with:
           tagName: 'v__VERSION__'
           releaseName: 'Release __VERSION__'
+
           releaseBody: |
             > [!IMPORTANT]
             > The Yaak project is open source and this binaries were built by @am93.
             
             No release notes are available!
+
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}

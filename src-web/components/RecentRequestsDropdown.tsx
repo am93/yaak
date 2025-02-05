@@ -2,11 +2,10 @@ import classNames from 'classnames';
 import { useMemo, useRef } from 'react';
 import { useActiveRequest } from '../hooks/useActiveRequest';
 import { getActiveWorkspaceId } from '../hooks/useActiveWorkspace';
-import { grpcRequestsAtom } from '../hooks/useGrpcRequests';
 import { useHotKey } from '../hooks/useHotKey';
-import { httpRequestsAtom } from '../hooks/useHttpRequests';
 import { useKeyboardEvent } from '../hooks/useKeyboardEvent';
 import { useRecentRequests } from '../hooks/useRecentRequests';
+import { requestsAtom } from '../hooks/useRequests';
 import { fallbackRequestName } from '../lib/fallbackRequestName';
 import { jotaiStore } from '../lib/jotai';
 import { router } from '../lib/router';
@@ -51,17 +50,15 @@ export function RecentRequestsDropdown({ className }: Props) {
     const activeWorkspaceId = getActiveWorkspaceId();
     if (activeWorkspaceId === null) return [];
 
-    const requests = [...jotaiStore.get(httpRequestsAtom), ...jotaiStore.get(grpcRequestsAtom)];
+    const requests = jotaiStore.get(requestsAtom);
     const recentRequestItems: DropdownItem[] = [];
     for (const id of recentRequestIds) {
       const request = requests.find((r) => r.id === id);
       if (request === undefined) continue;
 
       recentRequestItems.push({
-        key: request.id,
         label: fallbackRequestName(request),
-        // leftSlot: <CountBadge className="!ml-0 px-0 w-5" count={recentRequestItems.length} />,
-        leftSlot: <HttpMethodTag className="text-right" shortNames request={request} />,
+        leftSlot: <HttpMethodTag request={request} />,
         onSelect: async () => {
           await router.navigate({
             to: '/workspaces/$workspaceId',

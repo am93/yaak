@@ -42,6 +42,9 @@ pub enum AnalyticsResource {
     Sidebar,
     Tab,
     Theme,
+    WebsocketConnection,
+    WebsocketEvent,
+    WebsocketRequest,
     Workspace,
 }
 
@@ -202,7 +205,7 @@ pub async fn track_event<R: Runtime>(
     return;
 }
 
-fn get_os() -> &'static str {
+pub fn get_os() -> &'static str {
     if cfg!(target_os = "windows") {
         "windows"
     } else if cfg!(target_os = "macos") {

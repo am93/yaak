@@ -3805,7 +3805,8 @@ var algorithms = [
   "PS512",
   "ES256",
   "ES384",
-  "ES512"
+  "ES512",
+  "none"
 ];
 var defaultAlgorithm = algorithms[0];
 var plugin = {
@@ -3813,35 +3814,39 @@ var plugin = {
     name: "jwt",
     label: "JWT Bearer",
     shortLabel: "JWT",
-    config: [
+    args: [
       {
         type: "select",
         name: "algorithm",
         label: "Algorithm",
+        hideLabel: true,
         defaultValue: defaultAlgorithm,
-        options: algorithms.map((value) => ({ name: value, value }))
+        options: algorithms.map((value) => ({ label: value === "none" ? "None" : value, value }))
       },
       {
         type: "text",
         name: "secret",
-        label: "Secret",
-        optional: true
+        label: "Secret or Private Key",
+        password: true,
+        optional: true,
+        multiLine: true
       },
       {
         type: "checkbox",
         name: "secretBase64",
-        label: "Secret Base64 Encoded"
+        label: "Secret is base64 encoded"
       },
       {
         type: "editor",
         name: "payload",
         label: "Payload",
         language: "json",
-        optional: true
+        defaultValue: '{\n  "foo": "bar"\n}',
+        placeholder: "{ }"
       }
     ],
-    async onApply(_ctx, args) {
-      const { algorithm, secret: _secret, secretBase64, payload } = args.config;
+    async onApply(_ctx, { values }) {
+      const { algorithm, secret: _secret, secretBase64, payload } = values;
       const secret = secretBase64 ? Buffer.from(`${_secret}`, "base64") : `${_secret}`;
       const token = import_jsonwebtoken.default.sign(`${payload}`, secret, { algorithm });
       const value = `Bearer ${token}`;

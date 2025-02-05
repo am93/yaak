@@ -1,4 +1,4 @@
-import { defaultKeymap, historyField } from '@codemirror/commands';
+import { defaultKeymap, historyField, indentWithTab } from '@codemirror/commands';
 import { foldState, forceParsing } from '@codemirror/language';
 import type { EditorStateConfig, Extension } from '@codemirror/state';
 import { Compartment, EditorState } from '@codemirror/state';
@@ -10,6 +10,7 @@ import type { EditorKeymap, EnvironmentVariable } from '@yaakapp-internal/models
 import type { EditorLanguage, TemplateFunction } from '@yaakapp-internal/plugins';
 import classNames from 'classnames';
 import { EditorView } from 'codemirror';
+import { md5 } from 'js-md5';
 import type { MutableRefObject, ReactNode } from 'react';
 import {
   Children,
@@ -28,19 +29,28 @@ import { useRequestEditor } from '../../../hooks/useRequestEditor';
 import { useSettings } from '../../../hooks/useSettings';
 import { useTemplateFunctionCompletionOptions } from '../../../hooks/useTemplateFunctions';
 import { showDialog } from '../../../lib/dialog';
+import { tryFormatJson, tryFormatXml } from '../../../lib/formatters';
 import { TemplateFunctionDialog } from '../../TemplateFunctionDialog';
 import { TemplateVariableDialog } from '../../TemplateVariableDialog';
 import { IconButton } from '../IconButton';
 import { HStack } from '../Stacks';
 import './Editor.css';
-import { baseExtensions, getLanguageExtension, multiLineExtensions } from './extensions';
+import {
+  baseExtensions,
+  getLanguageExtension,
+  multiLineExtensions,
+  readonlyExtensions,
+} from './extensions';
 import type { GenericCompletionConfig } from './genericCompletion';
 import { singleLineExtensions } from './singleLine';
+
+// VSCode's Tab actions mess with the single-line editor tab actions, so remove it.
+const vsCodeWithoutTab = vscodeKeymap.filter((k) => k.key !== 'Tab');
 
 const keymapExtensions: Record<EditorKeymap, Extension> = {
   vim: vim(),
   emacs: emacs(),
-  vscode: keymap.of(vscodeKeymap),
+  vscode: keymap.of(vsCodeWithoutTab),
   default: [],
 };
 
@@ -67,6 +77,7 @@ export interface EditorProps {
   onKeyDown?: (e: KeyboardEvent) => void;
   singleLine?: boolean;
   wrapLines?: boolean;
+  disableTabIndent?: boolean;
   format?: (v: string) => Promise<string>;
   autocomplete?: GenericCompletionConfig;
   autocompleteVariables?: boolean;
@@ -84,9 +95,9 @@ const emptyExtension: Extension = [];
 export const Editor = forwardRef<EditorView | undefined, EditorProps>(function Editor(
   {
     readOnly,
-    type = 'text',
+    type,
     heightMode,
-    language = 'text',
+    language,
     autoFocus,
     autoSelect,
     placeholder,
@@ -100,6 +111,7 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
     onBlur,
     onKeyDown,
     className,
+    disabled,
     singleLine,
     format,
     autocomplete,
@@ -107,6 +119,7 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
     autocompleteVariables,
     actions,
     wrapLines,
+    disableTabIndent,
     hideGutter,
     stateKey,
   }: EditorProps,
@@ -119,6 +132,29 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
 
   if (settings && wrapLines === undefined) {
     wrapLines = settings.editorSoftWrap;
+  }
+
+  if (disabled) {
+    readOnly = true;
+  }
+
+  if (
+    singleLine ||
+    language == null ||
+    language === 'text' ||
+    language === 'url' ||
+    language === 'pairs'
+  ) {
+    disableTabIndent = true;
+  }
+
+  if (format == null && !readOnly) {
+    format =
+      language === 'json'
+        ? tryFormatJson
+        : language === 'xml' || language === 'html'
+          ? tryFormatXml
+          : undefined;
   }
 
   const cm = useRef<{ view: EditorView; languageCompartment: Compartment } | null>(null);
@@ -165,9 +201,9 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
   useEffect(
     function configurePlaceholder() {
       if (cm.current === null) return;
-      const ext = placeholderExt(placeholderElFromText(placeholder ?? '', type));
-      const effect = placeholderCompartment.current.reconfigure(ext);
-      cm.current?.view.dispatch({ effects: effect });
+      const ext = placeholderExt(placeholderElFromText(placeholder, type));
+      const effects = placeholderCompartment.current.reconfigure(ext);
+      cm.current?.view.dispatch({ effects });
     },
     [placeholder, type],
   );
@@ -185,8 +221,8 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
       if (settings.editorKeymap === 'emacs' && current === keymapExtensions['emacs']) return; // Nothing to do
 
       const ext = keymapExtensions[settings.editorKeymap] ?? keymapExtensions['default'];
-      const effect = keymapCompartment.current.reconfigure(ext);
-      cm.current.view.dispatch({ effects: effect });
+      const effects = keymapCompartment.current.reconfigure(ext);
+      cm.current.view.dispatch({ effects });
     },
     [settings.editorKeymap],
   );
@@ -201,11 +237,28 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
       if (wrapLines && current !== emptyExtension) return; // Nothing to do
       if (!wrapLines && current === emptyExtension) return; // Nothing to do
 
-      const ext = wrapLines ? EditorView.lineWrapping : [];
-      const effect = wrapLinesCompartment.current.reconfigure(ext);
-      cm.current?.view.dispatch({ effects: effect });
+      const ext = wrapLines ? EditorView.lineWrapping : emptyExtension;
+      const effects = wrapLinesCompartment.current.reconfigure(ext);
+      cm.current?.view.dispatch({ effects });
     },
     [wrapLines],
+  );
+
+  // Update tab indent
+  const tabIndentCompartment = useRef(new Compartment());
+  useEffect(
+    function configureTabIndent() {
+      if (cm.current === null) return;
+      const current = tabIndentCompartment.current.get(cm.current.view.state) ?? emptyExtension;
+      // PERF: This is expensive with hundreds of editors on screen, so only do it when necessary
+      if (disableTabIndent && current !== emptyExtension) return; // Nothing to do
+      if (!disableTabIndent && current === emptyExtension) return; // Nothing to do
+
+      const ext = !disableTabIndent ? keymap.of([indentWithTab]) : emptyExtension;
+      const effects = tabIndentCompartment.current.reconfigure(ext);
+      cm.current?.view.dispatch({ effects });
+    },
+    [disableTabIndent],
   );
 
   const onClickFunction = useCallback(
@@ -341,9 +394,12 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
         const extensions = [
           languageCompartment.of(langExt),
           placeholderCompartment.current.of(
-            placeholderExt(placeholderElFromText(placeholder ?? '', type)),
+            placeholderExt(placeholderElFromText(placeholder, type)),
           ),
-          wrapLinesCompartment.current.of(wrapLines ? EditorView.lineWrapping : []),
+          wrapLinesCompartment.current.of(wrapLines ? EditorView.lineWrapping : emptyExtension),
+          tabIndentCompartment.current.of(
+            !disableTabIndent ? keymap.of([indentWithTab]) : emptyExtension,
+          ),
           keymapCompartment.current.of(
             keymapExtensions[settings.editorKeymap] ?? keymapExtensions['default'],
           ),
@@ -474,6 +530,7 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
       className={classNames(
         className,
         'cm-wrapper text-base',
+        disabled && 'opacity-disabled',
         type === 'password' && 'cm-obscure-text',
         heightMode === 'auto' ? 'cm-auto-height' : 'cm-full-height',
         singleLine ? 'cm-singleline' : 'cm-multiline',
@@ -556,10 +613,8 @@ function getExtensions({
     tooltips({ parent }),
     keymap.of(singleLine ? defaultKeymap.filter((k) => k.key !== 'Enter') : defaultKeymap),
     ...(singleLine ? [singleLineExtensions()] : []),
-    ...(!singleLine ? [multiLineExtensions({ hideGutter })] : []),
-    ...(readOnly
-      ? [EditorState.readOnly.of(true), EditorView.contentAttributes.of({ tabindex: '-1' })]
-      : []),
+    ...(!singleLine ? multiLineExtensions({ hideGutter }) : []),
+    ...(readOnly ? readonlyExtensions : []),
 
     // ------------------------ //
     // Things that must be last //
@@ -579,13 +634,15 @@ function getExtensions({
   ];
 }
 
-const placeholderElFromText = (text: string, type: EditorProps['type']) => {
+const placeholderElFromText = (text: string | undefined, type: EditorProps['type']) => {
   const el = document.createElement('div');
   if (type === 'password') {
     // Will be obscured (dots) so just needs to be something to take up space
-    el.innerHTML = 'aaaaaaaaaa';
+    el.innerHTML = 'something-cool';
     el.setAttribute('aria-hidden', 'true');
   } else {
+    // Default to <SPACE> because codemirror needs it for sizing. I'm not sure why, but probably something
+    // to do with how Yaak "hacks" it with CSS for single line input.
     el.innerHTML = text ? text.replaceAll('\n', '<br/>') : ' ';
   }
   return el;
@@ -593,22 +650,38 @@ const placeholderElFromText = (text: string, type: EditorProps['type']) => {
 
 function saveCachedEditorState(stateKey: string | null, state: EditorState | null) {
   if (!stateKey || state == null) return;
-  sessionStorage.setItem(computeFullStateKey(stateKey), JSON.stringify(state.toJSON(stateFields)));
+  const stateObj = state.toJSON(stateFields);
+
+  // Save state in sessionStorage by removing doc and saving the hash of it instead.
+  // This will be checked on restore and put back in if it matches.
+  stateObj.docHash = md5(stateObj.doc);
+  delete stateObj.doc;
+
+  try {
+    sessionStorage.setItem(computeFullStateKey(stateKey), JSON.stringify(stateObj));
+  } catch (err) {
+    console.log('Failed to save to editor state', stateKey, err);
+  }
 }
 
 function getCachedEditorState(doc: string, stateKey: string | null) {
   if (stateKey == null) return;
 
-  const stateStr = sessionStorage.getItem(computeFullStateKey(stateKey));
-  if (stateStr == null) return null;
-
   try {
-    const state = JSON.parse(stateStr);
-    if (state.doc !== doc) return null;
+    const stateStr = sessionStorage.getItem(computeFullStateKey(stateKey));
+    if (stateStr == null) return null;
 
+    const { docHash, ...state } = JSON.parse(stateStr);
+
+    // Ensure the doc matches the one that was used to save the state
+    if (docHash !== md5(doc)) {
+      return null;
+    }
+
+    state.doc = doc;
     return state;
-  } catch {
-    // Nothing
+  } catch (err) {
+    console.log('Failed to restore editor storage', stateKey, err);
   }
 
   return null;

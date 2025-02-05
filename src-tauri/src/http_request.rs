@@ -1,6 +1,5 @@
 use crate::render::render_http_request;
 use crate::response_err;
-use crate::template_callback::PluginTemplateCallback;
 use http::header::{ACCEPT, USER_AGENT};
 use http::{HeaderMap, HeaderName, HeaderValue, Uri};
 use log::{debug, error, warn};
@@ -8,8 +7,9 @@ use mime_guess::Mime;
 use reqwest::redirect::Policy;
 use reqwest::{multipart, Proxy, Url};
 use reqwest::{Method, Response};
+use rustls::crypto::ring;
 use rustls::ClientConfig;
-use rustls_platform_verifier::ConfigVerifierExt;
+use rustls_platform_verifier::BuilderVerifierExt;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -34,6 +34,7 @@ use yaak_plugins::events::{
     CallHttpAuthenticationRequest, HttpHeader, RenderPurpose, WindowContext,
 };
 use yaak_plugins::manager::PluginManager;
+use yaak_plugins::template_callback::PluginTemplateCallback;
 
 pub async fn send_http_request<R: Runtime>(
     window: &WebviewWindow<R>,
@@ -70,7 +71,7 @@ pub async fn send_http_request<R: Runtime>(
     if !url_string.starts_with("http://") && !url_string.starts_with("https://") {
         url_string = format!("http://{}", url_string);
     }
-    debug!("Sending request to {url_string}");
+    debug!("Sending request to {} {url_string}", request.method);
 
     let mut client_builder = reqwest::Client::builder()
         .redirect(match workspace.setting_follow_redirects {
@@ -86,11 +87,15 @@ pub async fn send_http_request<R: Runtime>(
 
     if workspace.setting_validate_certificates {
         // Use platform-native verifier to validate certificates
-        client_builder =
-            client_builder.use_preconfigured_tls(ClientConfig::with_platform_verifier())
+        let arc_crypto_provider = Arc::new(ring::default_provider());
+        let config = ClientConfig::builder_with_provider(arc_crypto_provider)
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_platform_verifier()
+            .with_no_client_auth();
+        client_builder = client_builder.use_preconfigured_tls(config)
     } else {
-        // Use rustls to skip validation because rustls_platform_verifier does not have this
-        // ability
+        // Use rustls to skip validation because rustls_platform_verifier does not have this ability
         client_builder = client_builder
             .use_rustls_tls()
             .danger_accept_invalid_hostnames(true)
@@ -220,14 +225,14 @@ pub async fn send_http_request<R: Runtime>(
             continue;
         }
 
-        let header_name = match HeaderName::from_bytes(h.name.as_bytes()) {
+        let header_name = match HeaderName::from_str(&h.name) {
             Ok(n) => n,
             Err(e) => {
                 error!("Failed to create header name: {}", e);
                 continue;
             }
         };
-        let header_value = match HeaderValue::from_str(h.value.as_str()) {
+        let header_value = match HeaderValue::from_str(&h.value) {
             Ok(n) => n,
             Err(e) => {
                 error!("Failed to create header value: {}", e);
@@ -262,7 +267,7 @@ pub async fn send_http_request<R: Runtime>(
                     None => {}
                     Some(a) => {
                         for p in a {
-                            let enabled = get_bool(p, "enabled");
+                            let enabled = get_bool(p, "enabled", true);
                             let name = get_str(p, "name");
                             if !enabled || name.is_empty() {
                                 continue;
@@ -296,7 +301,7 @@ pub async fn send_http_request<R: Runtime>(
                     None => {}
                     Some(fd) => {
                         for p in fd {
-                            let enabled = get_bool(p, "enabled");
+                            let enabled = get_bool(p, "enabled", true);
                             let name = get_str(p, "name").to_string();
 
                             if !enabled || name.is_empty() {
@@ -326,14 +331,33 @@ pub async fn send_http_request<R: Runtime>(
 
                             // Set or guess mimetype
                             if !content_type.is_empty() {
-                                part = part.mime_str(content_type).map_err(|e| e.to_string())?;
+                                part = match part.mime_str(content_type) {
+                                    Ok(p) => p,
+                                    Err(e) => {
+                                        return Ok(response_err(
+                                            &*response.lock().await,
+                                            format!("Invalid mime for multi-part entry {e:?}"),
+                                            window,
+                                        )
+                                        .await);
+                                    }
+                                };
                             } else if !file_path.is_empty() {
                                 let default_mime =
                                     Mime::from_str("application/octet-stream").unwrap();
                                 let mime =
                                     mime_guess::from_path(file_path.clone()).first_or(default_mime);
-                                part =
-                                    part.mime_str(mime.essence_str()).map_err(|e| e.to_string())?;
+                                part = match part.mime_str(mime.essence_str()) {
+                                    Ok(p) => p,
+                                    Err(e) => {
+                                        return Ok(response_err(
+                                            &*response.lock().await,
+                                            format!("Invalid mime for multi-part entry {e:?}"),
+                                            window,
+                                        )
+                                        .await);
+                                    }
+                                };
                             }
 
                             // Set file path if not empty
@@ -376,13 +400,11 @@ pub async fn send_http_request<R: Runtime>(
 
     if let Some(auth_name) = request.authentication_type.to_owned() {
         let req = CallHttpAuthenticationRequest {
-            config: serde_json::to_value(&request.authentication)
-                .unwrap()
-                .as_object()
-                .unwrap()
-                .to_owned(),
-            method: sendable_req.method().to_string(),
+            context_id: format!("{:x}", md5::compute(request.id)),
+            values: serde_json::from_value(serde_json::to_value(&request.authentication).unwrap())
+                .unwrap(),
             url: sendable_req.url().to_string(),
+            method: sendable_req.method().to_string(),
             headers: sendable_req
                 .headers()
                 .iter()
@@ -604,10 +626,10 @@ fn ensure_proto(url_str: &str) -> String {
     format!("http://{url_str}")
 }
 
-fn get_bool(v: &Value, key: &str) -> bool {
+fn get_bool(v: &Value, key: &str, fallback: bool) -> bool {
     match v.get(key) {
-        None => false,
-        Some(v) => v.as_bool().unwrap_or_default(),
+        None => fallback,
+        Some(v) => v.as_bool().unwrap_or(fallback),
     }
 }
 
