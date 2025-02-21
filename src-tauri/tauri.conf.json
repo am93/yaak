@@ -71,7 +71,7 @@
       "nsis",
       "rpm"
     ],
-    "createUpdaterArtifacts": "v1Compatible",
+    "createUpdaterArtifacts": false,
     "macOS": {
       "minimumSystemVersion": "13.0",
       "exceptionDomain": "",
@@ -79,7 +79,10 @@
       "frameworks": []
     },
     "windows": {
-      "signCommand": "trusted-signing-cli -e https://eus.codesigning.azure.net/ -a Yaak -c yaakapp %1"
+      "certificateThumbprint": null,
+      "digestAlgorithm": null,
+      "timestampUrl": null,
+      "signCommand": null
     }
   }
 }
