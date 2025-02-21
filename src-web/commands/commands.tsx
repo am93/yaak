@@ -7,7 +7,7 @@ import { getActiveWorkspaceId } from '../hooks/useActiveWorkspace';
 import { createFastMutation } from '../hooks/useFastMutation';
 import { trackEvent } from '../lib/analytics';
 import { showConfirm } from '../lib/confirm';
-import { fallbackRequestName } from '../lib/fallbackRequestName';
+import { resolvedModelNameWithFolders } from '../lib/resolvedModelName';
 import { pluralizeCount } from '../lib/pluralize';
 import { showPrompt } from '../lib/prompt';
 import { invokeCmd } from '../lib/tauri';
@@ -48,10 +48,10 @@ export const createFolder = createFastMutation<
 export const syncWorkspace = createFastMutation<
   void,
   void,
-  { workspaceId: string; syncDir: string }
+  { workspaceId: string; syncDir: string; force?: boolean }
 >({
   mutationKey: [],
-  mutationFn: async ({ workspaceId, syncDir }) => {
+  mutationFn: async ({ workspaceId, syncDir, force }) => {
     const ops = (await calculateSync(workspaceId, syncDir)) ?? [];
     if (ops.length === 0) {
       console.log('Nothing to sync', workspaceId, syncDir);
@@ -70,68 +70,71 @@ export const syncWorkspace = createFastMutation<
       (o) => o.type === 'dbDelete' && o.model.model === 'workspace',
     );
 
-    console.log('Filesystem changes detected', { dbOps, ops });
+    console.log('Directory changes detected', { dbOps, ops });
 
-    const confirmed = await showConfirm({
-      id: 'commit-sync',
-      title: 'Filesystem Changes Detected',
-      confirmText: 'Apply Changes',
-      description: (
-        <VStack space={3}>
-          {isDeletingWorkspace && (
-            <Banner color="danger">
-              🚨 <strong>Changes contain a workspace deletion!</strong>
-            </Banner>
-          )}
-          <p>
-            {pluralizeCount('file', dbOps.length)} in the directory have changed. Do you want to
-            apply the updates to your workspace?
-          </p>
-          <div className="overflow-y-auto max-h-[10rem]">
-            <table className="w-full text-sm mb-auto min-w-full max-w-full divide-y divide-surface-highlight">
-              <thead>
-                <tr>
-                  <th className="py-1 text-left">Name</th>
-                  <th className="py-1 text-right pl-4">Operation</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-surface-highlight">
-                {dbOps.map((op, i) => {
-                  let name = '';
-                  let label = '';
-                  let color = '';
-
-                  if (op.type === 'dbCreate') {
-                    label = 'create';
-                    name = fallbackRequestName(op.fs.model);
-                    color = 'text-success';
-                  } else if (op.type === 'dbUpdate') {
-                    label = 'update';
-                    name = fallbackRequestName(op.fs.model);
-                    color = 'text-info';
-                  } else if (op.type === 'dbDelete') {
-                    label = 'delete';
-                    name = fallbackRequestName(op.model);
-                    color = 'text-danger';
-                  } else {
-                    return null;
-                  }
-
-                  return (
-                    <tr key={i} className="text-text">
-                      <td className="py-1">{name}</td>
-                      <td className="py-1 pl-4 text-right">
-                        <InlineCode className={color}>{label}</InlineCode>
-                      </td>
+    const confirmed = force
+      ? true
+      : await showConfirm({
+          id: 'commit-sync',
+          title: 'Changes Detected',
+          confirmText: 'Apply Changes',
+          color: isDeletingWorkspace ? 'danger' : 'primary',
+          description: (
+            <VStack space={3}>
+              {isDeletingWorkspace && (
+                <Banner color="danger">
+                  🚨 <strong>Changes contain a workspace deletion!</strong>
+                </Banner>
+              )}
+              <p>
+                {pluralizeCount('file', dbOps.length)} in the directory{' '}
+                {dbOps.length === 1 ? 'has' : 'have'} changed. Do you want to update your workspace?
+              </p>
+              <div className="overflow-y-auto max-h-[10rem]">
+                <table className="w-full text-sm mb-auto min-w-full max-w-full divide-y divide-surface-highlight">
+                  <thead>
+                    <tr>
+                      <th className="py-1 text-left">Name</th>
+                      <th className="py-1 text-right pl-4">Operation</th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </VStack>
-      ),
-    });
+                  </thead>
+                  <tbody className="divide-y divide-surface-highlight">
+                    {dbOps.map((op, i) => {
+                      let name = '';
+                      let label = '';
+                      let color = '';
+
+                      if (op.type === 'dbCreate') {
+                        label = 'create';
+                        name = resolvedModelNameWithFolders(op.fs.model);
+                        color = 'text-success';
+                      } else if (op.type === 'dbUpdate') {
+                        label = 'update';
+                        name = resolvedModelNameWithFolders(op.fs.model);
+                        color = 'text-info';
+                      } else if (op.type === 'dbDelete') {
+                        label = 'delete';
+                        name = resolvedModelNameWithFolders(op.model);
+                        color = 'text-danger';
+                      } else {
+                        return null;
+                      }
+
+                      return (
+                        <tr key={i} className="text-text">
+                          <td className="py-1">{name}</td>
+                          <td className="py-1 pl-4 text-right">
+                            <InlineCode className={color}>{label}</InlineCode>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </VStack>
+          ),
+        });
     if (confirmed) {
       await applySync(workspaceId, syncDir, ops);
     }

@@ -13,6 +13,7 @@ const KV_NAMESPACE: &str = "license";
 const KV_ACTIVATION_ID_KEY: &str = "activation_id";
 const TRIAL_SECONDS: u64 = 3600 * 24 * 365;
 
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "gen_models.ts")]

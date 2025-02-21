@@ -9,7 +9,7 @@ import type { ReflectResponseService } from '../hooks/useGrpc';
 import { useHttpAuthenticationSummaries } from '../hooks/useHttpAuthentication';
 import { useRequestUpdateKey } from '../hooks/useRequestUpdateKey';
 import { useUpdateAnyGrpcRequest } from '../hooks/useUpdateAnyGrpcRequest';
-import { fallbackRequestName } from '../lib/fallbackRequestName';
+import { resolvedModelName } from '../lib/resolvedModelName';
 import { Button } from './core/Button';
 import { CountBadge } from './core/CountBadge';
 import { Icon } from './core/Icon';
@@ -237,14 +237,14 @@ export function GrpcConnectionSetupPane({
               {
                 label: 'Refresh',
                 type: 'default',
-                leftSlot: <Icon className="text-text-subtlest" size="sm" icon="refresh" />,
+                leftSlot: <Icon size="sm" icon="refresh" />,
               },
             ]}
           >
             <Button
               size="sm"
               variant="border"
-              rightSlot={<Icon className="text-text-subtlest" size="sm" icon="chevron_down" />}
+              rightSlot={<Icon size="sm" icon="chevron_down" />}
               disabled={isStreaming || services == null}
               className={classNames(
                 'font-mono text-editor min-w-[5rem] !ring-0',
@@ -343,7 +343,7 @@ export function GrpcConnectionSetupPane({
               defaultValue={activeRequest.name}
               className="font-sans !text-xl !px-0"
               containerClassName="border-0"
-              placeholder={fallbackRequestName(activeRequest)}
+              placeholder={resolvedModelName(activeRequest)}
               onChange={(name) => updateRequest.mutate({ id: activeRequest.id, update: { name } })}
             />
             <MarkdownEditor

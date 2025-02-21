@@ -3,6 +3,7 @@ import { fuzzyFilter } from 'fuzzbunny';
 import type { KeyboardEvent, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createFolder } from '../commands/commands';
+import { openSettings } from '../commands/openSettings';
 import { switchWorkspace } from '../commands/switchWorkspace';
 import { useActiveCookieJar } from '../hooks/useActiveCookieJar';
 import { useActiveEnvironment } from '../hooks/useActiveEnvironment';
@@ -17,7 +18,6 @@ import { useEnvironments } from '../hooks/useEnvironments';
 import type { HotkeyAction } from '../hooks/useHotKey';
 import { useHotKey } from '../hooks/useHotKey';
 import { useHttpRequestActions } from '../hooks/useHttpRequestActions';
-import { useOpenSettings } from '../hooks/useOpenSettings';
 import { useRecentEnvironments } from '../hooks/useRecentEnvironments';
 import { useRecentRequests } from '../hooks/useRecentRequests';
 import { useRecentWorkspaces } from '../hooks/useRecentWorkspaces';
@@ -28,7 +28,7 @@ import { useSendAnyHttpRequest } from '../hooks/useSendAnyHttpRequest';
 import { useSidebarHidden } from '../hooks/useSidebarHidden';
 import { useWorkspaces } from '../hooks/useWorkspaces';
 import { showDialog, toggleDialog } from '../lib/dialog';
-import { fallbackRequestName } from '../lib/fallbackRequestName';
+import { resolvedModelNameWithFolders } from '../lib/resolvedModelName';
 import { router } from '../lib/router';
 import { setWorkspaceSearchParams } from '../lib/setWorkspaceSearchParams';
 import { CookieDialog } from './CookieDialog';
@@ -71,7 +71,6 @@ export function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
   const [recentRequests] = useRecentRequests();
   const [, setSidebarHidden] = useSidebarHidden();
   const { baseEnvironment } = useEnvironments();
-  const { mutate: openSettings } = useOpenSettings();
   const { mutate: createHttpRequest } = useCreateHttpRequest();
   const { mutate: createGrpcRequest } = useCreateGrpcRequest();
   const { mutate: createEnvironment } = useCreateEnvironment();
@@ -85,7 +84,7 @@ export function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
         key: 'settings.open',
         label: 'Open Settings',
         action: 'settings.show',
-        onSelect: openSettings,
+        onSelect: () => openSettings.mutate(null),
       },
       {
         key: 'app.create',
@@ -193,7 +192,6 @@ export function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
     createWorkspace,
     deleteRequest,
     httpRequestActions,
-    openSettings,
     renameRequest,
     sendRequest,
     setSidebarHidden,
@@ -272,11 +270,11 @@ export function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
     for (const r of sortedRequests) {
       requestGroup.items.push({
         key: `switch-request-${r.id}`,
-        searchText: fallbackRequestName(r),
+        searchText: resolvedModelNameWithFolders(r),
         label: (
           <HStack space={2}>
             <HttpMethodTag className="text-text-subtlest" request={r} />
-            <div className="truncate">{fallbackRequestName(r)}</div>
+            <div className="truncate">{resolvedModelNameWithFolders(r)}</div>
           </HStack>
         ),
         onSelect: async () => {
@@ -406,7 +404,7 @@ export function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
           hideLabel
           leftSlot={
             <div className="h-md w-10 flex justify-center items-center">
-              <Icon icon="search" className="text-text-subtle" />
+              <Icon icon="search" color="secondary" />
             </div>
           }
           name="command"

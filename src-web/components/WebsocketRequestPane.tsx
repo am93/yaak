@@ -21,7 +21,7 @@ import { useLatestWebsocketConnection } from '../hooks/useWebsocketConnections';
 import { trackEvent } from '../lib/analytics';
 import { deepEqualAtom } from '../lib/atoms';
 import { languageFromContentType } from '../lib/contentType';
-import { fallbackRequestName } from '../lib/fallbackRequestName';
+import { resolvedModelName } from '../lib/resolvedModelName';
 import { generateId } from '../lib/generateId';
 import { CountBadge } from './core/CountBadge';
 import { Editor } from './core/Editor/Editor';
@@ -235,6 +235,7 @@ export function WebsocketRequestPane({ style, fullHeight, className, activeReque
                     size="xs"
                     title="Close connection"
                     icon="x"
+                    iconColor="secondary"
                     className="w-8 mr-0.5 !h-full"
                     onClick={handleCancel}
                   />
@@ -302,7 +303,7 @@ export function WebsocketRequestPane({ style, fullHeight, className, activeReque
                   defaultValue={activeRequest.name}
                   className="font-sans !text-xl !px-0"
                   containerClassName="border-0"
-                  placeholder={fallbackRequestName(activeRequest)}
+                  placeholder={resolvedModelName(activeRequest)}
                   onChange={(name) => upsertWebsocketRequest.mutate({ ...activeRequest, name })}
                 />
                 <MarkdownEditor

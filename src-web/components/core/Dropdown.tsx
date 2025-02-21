@@ -36,17 +36,23 @@ import { HotKey } from './HotKey';
 import { Icon } from './Icon';
 import { Separator } from './Separator';
 import { HStack, VStack } from './Stacks';
+import { LoadingIcon } from './LoadingIcon';
 
 export type DropdownItemSeparator = {
   type: 'separator';
-  label?: string;
+  label?: ReactNode;
+  hidden?: boolean;
+};
+
+export type DropdownItemContent = {
+  type: 'content';
+  label?: ReactNode;
   hidden?: boolean;
 };
 
 export type DropdownItemDefault = {
   type?: 'default';
   label: ReactNode;
-  keepOpen?: boolean;
   hotKeyAction?: HotkeyAction;
   hotKeyLabelOnly?: boolean;
   color?: 'default' | 'danger' | 'info' | 'warning' | 'notice';
@@ -54,16 +60,18 @@ export type DropdownItemDefault = {
   hidden?: boolean;
   leftSlot?: ReactNode;
   rightSlot?: ReactNode;
-  onSelect?: () => void;
+  waitForOnSelect?: boolean;
+  onSelect?: () => void | Promise<void>;
 };
 
-export type DropdownItem = DropdownItemDefault | DropdownItemSeparator;
+export type DropdownItem = DropdownItemDefault | DropdownItemSeparator | DropdownItemContent;
 
 export interface DropdownProps {
   children: ReactElement<HTMLAttributes<HTMLButtonElement>>;
   items: DropdownItem[];
   fullWidth?: boolean;
   hotKeyAction?: HotkeyAction;
+  onOpen?: () => void;
 }
 
 export interface DropdownRef {
@@ -82,7 +90,7 @@ export interface DropdownRef {
 const openAtom = atom<string | null>(null);
 
 export const Dropdown = forwardRef<DropdownRef, DropdownProps>(function Dropdown(
-  { children, items, hotKeyAction, fullWidth }: DropdownProps,
+  { children, items, hotKeyAction, fullWidth, onOpen }: DropdownProps,
   ref,
 ) {
   const id = useRef(generateId());
@@ -109,13 +117,14 @@ export const Dropdown = forwardRef<DropdownRef, DropdownProps>(function Dropdown
       const newIsOpen = typeof o === 'function' ? o(prevIsOpen) : o;
       // Persist background color of button until we close the dropdown
       if (newIsOpen) {
+        onOpen?.();
         buttonRef.current!.style.backgroundColor = window
           .getComputedStyle(buttonRef.current!)
           .getPropertyValue('background-color');
       }
       return newIsOpen ? id.current : null; // Set global atom to current ID to signify open state
     });
-  }, []);
+  }, [onOpen]);
 
   // Because a different dropdown can cause ours to close, a useEffect([isOpen]) is the only method
   // we have of detecting the dropdown closed, to do cleanup.
@@ -374,14 +383,20 @@ const Menu = forwardRef<Omit<DropdownRef, 'open' | 'isOpen' | 'toggle' | 'items'
     );
 
     const handleSelect = useCallback(
-      (i: DropdownItem) => {
-        if (i.type !== 'separator' && !i.keepOpen) {
-          handleClose();
-        }
+      async (item: DropdownItem) => {
+        if (!('onSelect' in item) || !item.onSelect) return;
         setSelectedIndex(null);
-        if (i.type !== 'separator' && typeof i.onSelect === 'function') {
-          i.onSelect();
+
+        const promise = item.onSelect();
+        if (item.waitForOnSelect) {
+          try {
+            await promise;
+          } catch {
+            // Nothing
+          }
         }
+
+        handleClose();
       },
       [handleClose, setSelectedIndex],
     );
@@ -391,10 +406,10 @@ const Menu = forwardRef<Omit<DropdownRef, 'open' | 'isOpen' | 'toggle' | 'items'
         close: handleClose,
         prev: handlePrev,
         next: handleNext,
-        select() {
+        async select() {
           const item = items[selectedIndexRef.current ?? -1] ?? null;
           if (!item) return;
-          handleSelect(item);
+          await handleSelect(item);
         },
       };
     }, [handleClose, handleNext, handlePrev, handleSelect, items]);
@@ -466,6 +481,7 @@ const Menu = forwardRef<Omit<DropdownRef, 'open' | 'isOpen' | 'toggle' | 'items'
         {items.map(
           (item, i) =>
             item.type !== 'separator' &&
+            item.type !== 'content' &&
             !item.hotKeyLabelOnly &&
             item.hotKeyAction && (
               <MenuItemHotKey
@@ -519,7 +535,7 @@ const Menu = forwardRef<Omit<DropdownRef, 'open' | 'isOpen' | 'toggle' | 'items'
                     space={2}
                     className="pb-0.5 px-1.5 mb-2 text-sm border border-border-subtle mx-2 rounded font-mono h-xs"
                   >
-                    <Icon icon="search" size="xs" className="text-text-subtle" />
+                    <Icon icon="search" size="xs" />
                     <div className="text">{filter}</div>
                   </HStack>
                 )}
@@ -535,6 +551,13 @@ const Menu = forwardRef<Omit<DropdownRef, 'open' | 'isOpen' | 'toggle' | 'items'
                       <Separator key={i} className={classNames('my-1.5', item.label && 'ml-2')}>
                         {item.label}
                       </Separator>
+                    );
+                  }
+                  if (item.type === 'content') {
+                    return (
+                      <div key={i} className={classNames('my-1.5 mx-2 max-w-xs')}>
+                        {item.label}
+                      </div>
                     );
                   }
                   return (
@@ -559,13 +582,19 @@ const Menu = forwardRef<Omit<DropdownRef, 'open' | 'isOpen' | 'toggle' | 'items'
 interface MenuItemProps {
   className?: string;
   item: DropdownItemDefault;
-  onSelect: (item: DropdownItemDefault) => void;
+  onSelect: (item: DropdownItemDefault) => Promise<void>;
   onFocus: (item: DropdownItemDefault) => void;
   focused: boolean;
 }
 
 function MenuItem({ className, focused, onFocus, item, onSelect, ...props }: MenuItemProps) {
-  const handleClick = useCallback(() => onSelect?.(item), [item, onSelect]);
+  const [isLoading, setIsLoading] = useState(false);
+  const handleClick = useCallback(async () => {
+    if (item.waitForOnSelect) setIsLoading(true);
+    await onSelect?.(item);
+    if (item.waitForOnSelect) setIsLoading(false);
+  }, [item, onSelect]);
+
   const handleFocus = useCallback(
     (e: ReactFocusEvent<HTMLButtonElement>) => {
       e.stopPropagation(); // Don't trigger focus on any parents
@@ -598,7 +627,11 @@ function MenuItem({ className, focused, onFocus, item, onSelect, ...props }: Men
       onClick={handleClick}
       justify="start"
       leftSlot={
-        item.leftSlot && <div className="pr-2 flex justify-start opacity-70">{item.leftSlot}</div>
+        (isLoading || item.leftSlot) && (
+          <div className={classNames('pr-2 flex justify-start opacity-70')}>
+            {isLoading ? <LoadingIcon /> : item.leftSlot}
+          </div>
+        )
       }
       rightSlot={rightSlot && <div className="ml-auto pl-3">{rightSlot}</div>}
       innerClassName="!text-left"
