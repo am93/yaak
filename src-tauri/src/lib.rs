@@ -1208,9 +1208,8 @@ async fn cmd_new_main_window(app_handle: AppHandle, url: &str) -> YaakResult<()>
 async fn cmd_check_for_updates<R: Runtime>(
     window: WebviewWindow<R>,
     yaak_updater: State<'_, Mutex<YaakUpdater>>,
-) -> YaakResult<bool> {
-    let update_mode = get_update_mode(&window).await?;
-    Ok(yaak_updater.lock().await.check_now(&window, update_mode, UpdateTrigger::User).await?)
+) -> Result<bool, String> {
+    Ok(false)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1303,8 +1302,8 @@ pub fn run() {
             create_dir_all(app_data_dir.clone()).expect("Problem creating App directory!");
 
             // Add updater
-            let yaak_updater = YaakUpdater::new();
-            app.manage(Mutex::new(yaak_updater));
+            //let yaak_updater = YaakUpdater::new();
+            //app.manage(Mutex::new(yaak_updater));
 
             // Add notifier
             let yaak_notifier = YaakNotifier::new();
@@ -1322,7 +1321,6 @@ pub fn run() {
             cmd_call_http_authentication_action,
             cmd_call_http_request_action,
             cmd_call_grpc_request_action,
-            cmd_check_for_updates,
             cmd_create_grpc_request,
             cmd_curl_to_request,
             cmd_delete_all_grpc_connections,
