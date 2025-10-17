@@ -65,11 +65,18 @@
       "nsis",
       "rpm"
     ],
+    "createUpdaterArtifacts": false,
     "macOS": {
       "minimumSystemVersion": "13.0",
       "exceptionDomain": "",
       "entitlements": "macos/entitlements.plist",
       "frameworks": []
+    },
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": null,
+      "timestampUrl": null,
+      "signCommand": null
     }
   }
 }

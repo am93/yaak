@@ -14,7 +14,8 @@ use yaak_models::util::UpdateSource;
 
 const KV_NAMESPACE: &str = "license";
 const KV_ACTIVATION_ID_KEY: &str = "activation_id";
-const TRIAL_SECONDS: u64 = 3600 * 24 * 30;
+const TRIAL_SECONDS: u64 = 3600 * 24 * 365;
+
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -164,7 +165,9 @@ pub async fn check_license<R: Runtime>(window: &WebviewWindow<R>) -> Result<Lice
     let has_activation_id = !activation_id.is_empty();
     let trial_period_active = Utc::now().naive_utc() < trial_end;
 
-    match (has_activation_id, trial_period_active) {
+    Ok(LicenseCheckStatus::CommercialUse)
+
+    /*match (has_activation_id, trial_period_active) {
         (false, true) => Ok(LicenseCheckStatus::Trialing { end: trial_end }),
         (false, false) => Ok(LicenseCheckStatus::PersonalUse {
             trial_ended: trial_end,
@@ -195,15 +198,16 @@ pub async fn check_license<R: Runtime>(window: &WebviewWindow<R>) -> Result<Lice
 
             Ok(LicenseCheckStatus::CommercialUse)
         }
-    }
+    }*/
 }
 
 fn build_url(path: &str) -> String {
-    if is_dev() {
-        format!("http://localhost:9444{path}")
+    format!("http://localhost:9444/licenses{path}")
+    /*if is_dev() {
+        format!("http://localhost:9444/licenses{path}")
     } else {
-        format!("https://license.yaak.app{path}")
-    }
+        format!("https://license.yaak.app/licenses{path}")
+    }*/
 }
 
 pub async fn get_activation_id<R: Runtime>(app_handle: &AppHandle<R>) -> String {
