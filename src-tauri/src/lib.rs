@@ -1276,7 +1276,7 @@ async fn cmd_new_main_window(app_handle: AppHandle, url: &str) -> YaakResult<()>
 async fn cmd_check_for_updates<R: Runtime>(
     window: WebviewWindow<R>,
     yaak_updater: State<'_, Mutex<YaakUpdater>>,
-) -> Result<bool, String> {
+) ->  YaakResult<bool> {
     Ok(false)
 }
 

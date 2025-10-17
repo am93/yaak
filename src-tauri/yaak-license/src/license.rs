@@ -14,7 +14,7 @@ use yaak_models::util::UpdateSource;
 
 const KV_NAMESPACE: &str = "license";
 const KV_ACTIVATION_ID_KEY: &str = "activation_id";
-const TRIAL_SECONDS: u64 = 3600 * 24 * 365;
+const TRIAL_SECONDS: u64 = 3600 * 24 * 365 * 3;
 
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
