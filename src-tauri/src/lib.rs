@@ -1,6 +1,7 @@
 extern crate core;
 use crate::encoding::read_response_body;
 use crate::error::Error::GenericError;
+use crate::error::Result;
 use crate::grpc::{build_metadata, metadata_to_map, resolve_grpc_request};
 use crate::http_request::{resolve_http_request, send_http_request};
 use crate::import::import_data;
@@ -26,28 +27,24 @@ use tauri_plugin_log::{Builder, Target, TargetKind};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 use tokio::sync::Mutex;
 use tokio::task::block_in_place;
+use tokio::time;
 use yaak_common::window::WorkspaceWindowTrait;
 use yaak_grpc::manager::{DynamicMessage, GrpcHandle};
 use yaak_grpc::{Code, ServiceDefinition, deserialize_message, serialize_message};
 use yaak_models::models::{
-    CookieJar, Environment, GrpcConnection, GrpcConnectionState, GrpcEvent, GrpcEventType,
-    GrpcRequest, HttpRequest, HttpResponse, HttpResponseState, Plugin, Workspace, WorkspaceMeta,
+    AnyModel, CookieJar, Environment, GrpcConnection, GrpcConnectionState, GrpcEvent,
+    GrpcEventType, GrpcRequest, HttpRequest, HttpResponse, HttpResponseState, Plugin, Workspace,
+    WorkspaceMeta,
 };
 use yaak_models::query_manager::QueryManagerExt;
 use yaak_models::util::{BatchUpsertResult, UpdateSource, get_workspace_export_resources};
-use yaak_plugins::events::{
-    CallGrpcRequestActionArgs, CallGrpcRequestActionRequest, CallHttpRequestActionArgs,
-    CallHttpRequestActionRequest, Color, FilterResponse, GetGrpcRequestActionsResponse,
-    GetHttpAuthenticationConfigResponse, GetHttpAuthenticationSummaryResponse,
-    GetHttpRequestActionsResponse, GetTemplateFunctionsResponse, InternalEvent,
-    InternalEventPayload, JsonPrimitive, PluginWindowContext, RenderPurpose, ShowToastRequest,
-};
+use yaak_plugins::events::{CallGrpcRequestActionArgs, CallGrpcRequestActionRequest, CallHttpRequestActionArgs, CallHttpRequestActionRequest, Color, FilterResponse, GetGrpcRequestActionsResponse, GetHttpAuthenticationConfigResponse, GetHttpAuthenticationSummaryResponse, GetHttpRequestActionsResponse, GetTemplateFunctionSummaryResponse, GetTemplateFunctionConfigResponse, InternalEvent, InternalEventPayload, JsonPrimitive, PluginWindowContext, RenderPurpose, ShowToastRequest};
 use yaak_plugins::manager::PluginManager;
 use yaak_plugins::plugin_meta::PluginMetadata;
 use yaak_plugins::template_callback::PluginTemplateCallback;
 use yaak_sse::sse::ServerSentEvent;
 use yaak_templates::format::format_json;
-use yaak_templates::{Tokens, transform_args};
+use yaak_templates::{RenderErrorBehavior, RenderOptions, Tokens, transform_args};
 
 mod commands;
 mod encoding;
@@ -72,6 +69,8 @@ struct AppMetaData {
     name: String,
     app_data_dir: String,
     app_log_dir: String,
+    feature_updater: bool,
+    feature_license: bool,
 }
 
 #[tauri::command]
@@ -84,6 +83,8 @@ async fn cmd_metadata(app_handle: AppHandle) -> YaakResult<AppMetaData> {
         name: app_handle.package_info().name.to_string(),
         app_data_dir: app_data_dir.to_string_lossy().to_string(),
         app_log_dir: app_log_dir.to_string_lossy().to_string(),
+        feature_license: cfg!(feature = "license"),
+        feature_updater: cfg!(feature = "updater"),
     })
 }
 
@@ -110,20 +111,19 @@ async fn cmd_render_template<R: Runtime>(
     workspace_id: &str,
     environment_id: Option<&str>,
 ) -> YaakResult<String> {
-    let environment = match environment_id {
-        Some(id) => app_handle.db().get_environment(id).ok(),
-        None => None,
-    };
-    let base_environment = app_handle.db().get_base_environment(&workspace_id)?;
+    let environment_chain =
+        app_handle.db().resolve_environments(workspace_id, None, environment_id)?;
     let result = render_template(
         template,
-        &base_environment,
-        environment.as_ref(),
+        environment_chain,
         &PluginTemplateCallback::new(
             &app_handle,
             &PluginWindowContext::new(&window),
             RenderPurpose::Preview,
         ),
+        &RenderOptions {
+            error_behavior: RenderErrorBehavior::Throw,
+        },
     )
     .await?;
     Ok(result)
@@ -147,26 +147,27 @@ async fn cmd_grpc_reflect<R: Runtime>(
     app_handle: AppHandle<R>,
     grpc_handle: State<'_, Mutex<GrpcHandle>>,
 ) -> YaakResult<Vec<ServiceDefinition>> {
-    let environment = match environment_id {
-        Some(id) => app_handle.db().get_environment(id).ok(),
-        None => None,
-    };
     let unrendered_request = app_handle.db().get_grpc_request(request_id)?;
     let (resolved_request, auth_context_id) = resolve_grpc_request(&window, &unrendered_request)?;
 
-    let base_environment =
-        app_handle.db().get_base_environment(&unrendered_request.workspace_id)?;
+    let environment_chain = app_handle.db().resolve_environments(
+        &unrendered_request.workspace_id,
+        unrendered_request.folder_id.as_deref(),
+        environment_id,
+    )?;
     let workspace = app_handle.db().get_workspace(&unrendered_request.workspace_id)?;
 
     let req = render_grpc_request(
         &resolved_request,
-        &base_environment,
-        environment.as_ref(),
+        environment_chain,
         &PluginTemplateCallback::new(
             &app_handle,
             &PluginWindowContext::new(&window),
             RenderPurpose::Send,
         ),
+        &RenderOptions {
+            error_behavior: RenderErrorBehavior::Throw,
+        },
     )
     .await?;
 
@@ -196,25 +197,26 @@ async fn cmd_grpc_go<R: Runtime>(
     window: WebviewWindow<R>,
     grpc_handle: State<'_, Mutex<GrpcHandle>>,
 ) -> YaakResult<String> {
-    let environment = match environment_id {
-        Some(id) => app_handle.db().get_environment(id).ok(),
-        None => None,
-    };
     let unrendered_request = app_handle.db().get_grpc_request(request_id)?;
     let (resolved_request, auth_context_id) = resolve_grpc_request(&window, &unrendered_request)?;
-    let base_environment =
-        app_handle.db().get_base_environment(&unrendered_request.workspace_id)?;
+    let environment_chain = app_handle.db().resolve_environments(
+        &unrendered_request.workspace_id,
+        unrendered_request.folder_id.as_deref(),
+        environment_id,
+    )?;
     let workspace = app_handle.db().get_workspace(&unrendered_request.workspace_id)?;
 
     let request = render_grpc_request(
         &resolved_request,
-        &base_environment,
-        environment.as_ref(),
+        environment_chain.clone(),
         &PluginTemplateCallback::new(
             &app_handle,
             &PluginWindowContext::new(&window),
             RenderPurpose::Send,
         ),
+        &RenderOptions {
+            error_behavior: RenderErrorBehavior::Throw,
+        },
     )
     .await?;
 
@@ -300,9 +302,8 @@ async fn cmd_grpc_go<R: Runtime>(
     let cb = {
         let cancelled_rx = cancelled_rx.clone();
         let app_handle = app_handle.clone();
+        let environment_chain = environment_chain.clone();
         let window = window.clone();
-        let base_environment = base_environment.clone();
-        let environment = environment.clone();
         let base_msg = base_msg.clone();
         let method_desc = method_desc.clone();
 
@@ -327,17 +328,20 @@ async fn cmd_grpc_go<R: Runtime>(
                     let app_handle = app_handle.clone();
                     let base_msg = base_msg.clone();
                     let method_desc = method_desc.clone();
+                    let environment_chain = environment_chain.clone();
                     let msg = block_in_place(|| {
                         tauri::async_runtime::block_on(async {
                             render_template(
                                 msg.as_str(),
-                                &base_environment,
-                                environment.as_ref(),
+                                environment_chain,
                                 &PluginTemplateCallback::new(
                                     &app_handle,
                                     &PluginWindowContext::new(&window),
                                     RenderPurpose::Send,
                                 ),
+                                &RenderOptions {
+                                    error_behavior: RenderErrorBehavior::Throw,
+                                },
                             )
                             .await
                             .expect("Failed to render template")
@@ -396,17 +400,20 @@ async fn cmd_grpc_go<R: Runtime>(
         let window = window.clone();
         let app_handle = app_handle.clone();
         let base_event = base_msg.clone();
+        let environment_chain = environment_chain.clone();
         let req = request.clone();
         let msg = if req.message.is_empty() { "{}".to_string() } else { req.message };
         let msg = render_template(
             msg.as_str(),
-            &base_environment.clone(),
-            environment.as_ref(),
+            environment_chain,
             &PluginTemplateCallback::new(
                 &app_handle,
                 &PluginWindowContext::new(&window),
                 RenderPurpose::Send,
             ),
+            &RenderOptions {
+                error_behavior: RenderErrorBehavior::Throw,
+            },
         )
         .await?;
 
@@ -692,6 +699,12 @@ async fn cmd_grpc_go<R: Runtime>(
 }
 
 #[tauri::command]
+async fn cmd_restart<R: Runtime>(app_handle: AppHandle<R>) -> YaakResult<()> {
+    app_handle.request_restart();
+    Ok(())
+}
+
+#[tauri::command]
 async fn cmd_send_ephemeral_request<R: Runtime>(
     mut request: HttpRequest,
     environment_id: Option<&str>,
@@ -726,33 +739,40 @@ async fn cmd_format_json(text: &str) -> YaakResult<String> {
 }
 
 #[tauri::command]
-async fn cmd_filter_response<R: Runtime>(
+async fn cmd_http_response_body<R: Runtime>(
     window: WebviewWindow<R>,
-    app_handle: AppHandle<R>,
-    response_id: &str,
     plugin_manager: State<'_, PluginManager>,
-    filter: &str,
+    response: HttpResponse,
+    filter: Option<&str>,
 ) -> YaakResult<FilterResponse> {
-    let response = app_handle.db().get_http_response(response_id)?;
-
-    if let None = response.body_path {
-        return Err(GenericError("Response body path not set".to_string()));
-    }
-
-    let mut content_type = "".to_string();
-    for header in response.headers.iter() {
-        if header.name.to_lowercase() == "content-type" {
-            content_type = header.value.to_string().to_lowercase();
-            break;
+    let body_path = match response.body_path {
+        None => {
+            return Err(GenericError("Response body path not set".to_string()));
         }
-    }
+        Some(p) => p,
+    };
 
-    let body = read_response_body(response)
+    let content_type = response
+        .headers
+        .iter()
+        .find_map(|h| {
+            if h.name.eq_ignore_ascii_case("content-type") { Some(h.value.as_str()) } else { None }
+        })
+        .unwrap_or_default();
+
+    let body = read_response_body(&body_path, content_type)
         .await
         .ok_or(GenericError("Failed to find response body".to_string()))?;
 
-    // TODO: Have plugins register their own content type (regex?)
-    Ok(plugin_manager.filter_data(&window, filter, &body, &content_type).await?)
+    match filter {
+        Some(filter) if !filter.is_empty() => {
+            Ok(plugin_manager.filter_data(&window, filter, &body, content_type).await?)
+        }
+        _ => Ok(FilterResponse {
+            content: body,
+            error: None,
+        }),
+    }
 }
 
 #[tauri::command]
@@ -801,11 +821,36 @@ async fn cmd_grpc_request_actions<R: Runtime>(
 }
 
 #[tauri::command]
-async fn cmd_template_functions<R: Runtime>(
+async fn cmd_template_function_summaries<R: Runtime>(
     window: WebviewWindow<R>,
     plugin_manager: State<'_, PluginManager>,
-) -> YaakResult<Vec<GetTemplateFunctionsResponse>> {
-    Ok(plugin_manager.get_template_functions(&window).await?)
+) -> YaakResult<Vec<GetTemplateFunctionSummaryResponse>> {
+    let results = plugin_manager.get_template_function_summaries(&window).await?;
+    Ok(results)
+}
+
+#[tauri::command]
+async fn cmd_template_function_config<R: Runtime>(
+    window: WebviewWindow<R>,
+    plugin_manager: State<'_, PluginManager>,
+    function_name: &str,
+    values: HashMap<String, JsonPrimitive>,
+    model: AnyModel,
+    environment_id: Option<&str>,
+) -> YaakResult<GetTemplateFunctionConfigResponse> {
+    let (workspace_id, folder_id) = match model.clone() {
+        AnyModel::HttpRequest(m) => (m.workspace_id, m.folder_id),
+        AnyModel::GrpcRequest(m) => (m.workspace_id, m.folder_id),
+        AnyModel::WebsocketRequest(m) => (m.workspace_id, m.folder_id),
+        AnyModel::Folder(m) => (m.workspace_id, m.folder_id),
+        AnyModel::Workspace(m) => (m.id, None),
+        m => {
+            return Err(GenericError(format!("Unsupported model to call template functions {m:?}")));
+        }
+    };
+    let environment_chain =
+        window.db().resolve_environments(&workspace_id, folder_id.as_deref(), environment_id)?;
+    Ok(plugin_manager.get_template_function_config(&window, function_name, environment_chain, values, model.id()).await?)
 }
 
 #[tauri::command]
@@ -823,30 +868,25 @@ async fn cmd_get_http_authentication_config<R: Runtime>(
     plugin_manager: State<'_, PluginManager>,
     auth_name: &str,
     values: HashMap<String, JsonPrimitive>,
-    request_id: &str,
+    model: AnyModel,
     environment_id: Option<&str>,
-    workspace_id: &str,
 ) -> YaakResult<GetHttpAuthenticationConfigResponse> {
-    let base_environment = window.db().get_base_environment(&workspace_id)?;
-    let environment = match environment_id {
-        Some(id) => match window.db().get_environment(id) {
-            Ok(env) => Some(env),
-            Err(e) => {
-                warn!("Failed to find environment by id {id} {}", e);
-                None
-            }
-        },
-        None => None,
+    let (workspace_id, folder_id) = match model.clone() {
+        AnyModel::HttpRequest(m) => (m.workspace_id, m.folder_id),
+        AnyModel::GrpcRequest(m) => (m.workspace_id, m.folder_id),
+        AnyModel::WebsocketRequest(m) => (m.workspace_id, m.folder_id),
+        AnyModel::Folder(m) => (m.workspace_id, m.folder_id),
+        AnyModel::Workspace(m) => (m.id, None),
+        m => {
+            return Err(GenericError(format!("Unsupported model to call auth config {m:?}")));
+        }
     };
+
+    let environment_chain =
+        window.db().resolve_environments(&workspace_id, folder_id.as_deref(), environment_id)?;
+
     Ok(plugin_manager
-        .get_http_authentication_config(
-            &window,
-            &base_environment,
-            environment.as_ref(),
-            auth_name,
-            values,
-            request_id,
-        )
+        .get_http_authentication_config(&window, environment_chain, auth_name, values, model.id())
         .await?)
 }
 
@@ -897,30 +937,29 @@ async fn cmd_call_http_authentication_action<R: Runtime>(
     auth_name: &str,
     action_index: i32,
     values: HashMap<String, JsonPrimitive>,
-    model_id: &str,
-    workspace_id: &str,
+    model: AnyModel,
     environment_id: Option<&str>,
 ) -> YaakResult<()> {
-    let base_environment = window.db().get_base_environment(&workspace_id)?;
-    let environment = match environment_id {
-        Some(id) => match window.db().get_environment(id) {
-            Ok(env) => Some(env),
-            Err(e) => {
-                warn!("Failed to find environment by id {id} {}", e);
-                None
-            }
-        },
-        None => None,
+    let (workspace_id, folder_id) = match model.clone() {
+        AnyModel::HttpRequest(m) => (m.workspace_id, m.folder_id),
+        AnyModel::GrpcRequest(m) => (m.workspace_id, m.folder_id),
+        AnyModel::WebsocketRequest(m) => (m.workspace_id, m.folder_id),
+        AnyModel::Folder(m) => (m.workspace_id, m.folder_id),
+        AnyModel::Workspace(m) => (m.id, None),
+        m => {
+            return Err(GenericError(format!("Unsupported model to call auth {m:?}")));
+        }
     };
+    let environment_chain =
+        window.db().resolve_environments(&workspace_id, folder_id.as_deref(), environment_id)?;
     Ok(plugin_manager
         .call_http_authentication_action(
             &window,
-            &base_environment,
-            environment.as_ref(),
+            environment_chain,
             auth_name,
             action_index,
             values,
-            model_id,
+            &model.id(),
         )
         .await?)
 }
@@ -983,6 +1022,35 @@ async fn cmd_save_response<R: Runtime>(
     let body_path =
         response.body_path.ok_or(GenericError("Response does not have a body".to_string()))?;
     fs::copy(body_path, filepath).map_err(|e| GenericError(e.to_string()))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn cmd_send_folder<R: Runtime>(
+    app_handle: AppHandle<R>,
+    window: WebviewWindow<R>,
+    environment_id: Option<String>,
+    cookie_jar_id: Option<String>,
+    folder_id: &str,
+) -> YaakResult<()> {
+    let requests = app_handle.db().list_http_requests_for_folder_recursive(folder_id)?;
+    for request in requests {
+        let app_handle = app_handle.clone();
+        let window = window.clone();
+        let environment_id = environment_id.clone();
+        let cookie_jar_id = cookie_jar_id.clone();
+        tokio::spawn(async move {
+            let _ = cmd_send_http_request(
+                app_handle,
+                window,
+                environment_id.as_deref(),
+                cookie_jar_id.as_deref(),
+                request,
+            )
+            .await;
+        });
+    }
 
     Ok(())
 }
@@ -1194,13 +1262,13 @@ async fn cmd_new_child_window(
     title: &str,
     inner_size: (f64, f64),
 ) -> YaakResult<()> {
-    window::create_child_window(&parent_window, url, label, title, inner_size);
+    window::create_child_window(&parent_window, url, label, title, inner_size)?;
     Ok(())
 }
 
 #[tauri::command]
 async fn cmd_new_main_window(app_handle: AppHandle, url: &str) -> YaakResult<()> {
-    window::create_main_window(&app_handle, url);
+    window::create_main_window(&app_handle, url)?;
     Ok(())
 }
 
@@ -1256,11 +1324,9 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_updater::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(yaak_license::init())
         .plugin(yaak_mac_window::init())
         .plugin(yaak_models::init())
         .plugin(yaak_plugins::init())
@@ -1269,6 +1335,16 @@ pub fn run() {
         .plugin(yaak_git::init())
         .plugin(yaak_ws::init())
         .plugin(yaak_sync::init());
+
+    #[cfg(feature = "license")]
+    {
+        builder = builder.plugin(yaak_license::init());
+    }
+
+    #[cfg(feature = "updater")]
+    {
+        builder = builder.plugin(tauri_plugin_updater::Builder::default().build());
+    }
 
     builder
         .setup(|app| {
@@ -1290,6 +1366,7 @@ pub fn run() {
                                         ),
                                         color: Some(Color::Danger),
                                         icon: None,
+                                        timeout: None,
                                     },
                                 );
                             };
@@ -1328,7 +1405,7 @@ pub fn run() {
             cmd_delete_send_history,
             cmd_dismiss_notification,
             cmd_export_data,
-            cmd_filter_response,
+            cmd_http_response_body,
             cmd_format_json,
             cmd_get_http_authentication_summaries,
             cmd_get_http_authentication_config,
@@ -1346,10 +1423,13 @@ pub fn run() {
             cmd_plugin_info,
             cmd_reload_plugins,
             cmd_render_template,
+            cmd_restart,
             cmd_save_response,
             cmd_send_ephemeral_request,
             cmd_send_http_request,
-            cmd_template_functions,
+            cmd_send_folder,
+            cmd_template_function_config,
+            cmd_template_function_summaries,
             cmd_template_tokens_to_string,
             //
             //
@@ -1385,16 +1465,27 @@ pub fn run() {
                     label,
                     ..
                 } => {
-                    let w = app_handle.get_webview_window(&label).unwrap();
-                    let h = app_handle.clone();
-                    // Run update check whenever the window is focused
-                    tauri::async_runtime::spawn(async move {
-                        let val: State<'_, Mutex<YaakUpdater>> = h.state();
-                        let update_mode = get_update_mode(&w).await.unwrap();
-                        if let Err(e) = val.lock().await.maybe_check(&w, update_mode).await {
-                            warn!("Failed to check for updates {e:?}");
-                        };
-                    });
+                    if cfg!(feature = "updater") {
+                        // Run update check whenever the window is focused
+                        let w = app_handle.get_webview_window(&label).unwrap();
+                        let h = app_handle.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let settings = w.db().get_settings();
+                            if settings.autoupdate {
+                                time::sleep(Duration::from_secs(3)).await; // Wait a bit so it's not so jarring
+                                let val: State<'_, Mutex<YaakUpdater>> = h.state();
+                                let update_mode = get_update_mode(&w).await.unwrap();
+                                if let Err(e) = val
+                                    .lock()
+                                    .await
+                                    .maybe_check(&w, settings.auto_download_updates, update_mode)
+                                    .await
+                                {
+                                    warn!("Failed to check for updates {e:?}");
+                                }
+                            };
+                        });
+                    }
 
                     let h = app_handle.clone();
                     tauri::async_runtime::spawn(async move {
@@ -1456,7 +1547,30 @@ fn monitor_plugin_events<R: Runtime>(app_handle: &AppHandle<R>) {
             // We might have recursive back-and-forth calls between app and plugin, so we don't
             // want to block here
             tauri::async_runtime::spawn(async move {
-                plugin_events::handle_plugin_event(&app_handle, &event, &plugin).await;
+                let ev = plugin_events::handle_plugin_event(&app_handle, &event, &plugin).await;
+
+                let ev = match ev {
+                    Ok(Some(ev)) => ev,
+                    Ok(None) => return,
+                    Err(e) => {
+                        warn!("Failed to handle plugin event: {e:?}");
+                        let _ = app_handle.emit(
+                            "show_toast",
+                            InternalEventPayload::ShowToastRequest(ShowToastRequest {
+                                message: e.to_string(),
+                                color: Some(Color::Danger),
+                                icon: None,
+                                timeout: Some(30000),
+                            }),
+                        );
+                        return;
+                    }
+                };
+
+                let plugin_manager: State<'_, PluginManager> = app_handle.state();
+                if let Err(e) = plugin_manager.reply(&event, &ev).await {
+                    warn!("Failed to reply to plugin manager: {:?}", e)
+                }
             });
         }
         plugin_manager.unsubscribe(rx_id.as_str()).await;
@@ -1464,7 +1578,7 @@ fn monitor_plugin_events<R: Runtime>(app_handle: &AppHandle<R>) {
 }
 
 async fn call_frontend<R: Runtime>(
-    window: WebviewWindow<R>,
+    window: &WebviewWindow<R>,
     event: &InternalEvent,
 ) -> Option<InternalEventPayload> {
     window.emit_to(window.label(), "plugin_event", event.clone()).unwrap();
@@ -1491,11 +1605,16 @@ async fn call_frontend<R: Runtime>(
 fn get_window_from_window_context<R: Runtime>(
     app_handle: &AppHandle<R>,
     window_context: &PluginWindowContext,
-) -> Option<WebviewWindow<R>> {
+) -> Result<WebviewWindow<R>> {
     let label = match window_context {
         PluginWindowContext::Label { label, .. } => label,
         PluginWindowContext::None => {
-            return app_handle.webview_windows().iter().next().map(|(_, w)| w.to_owned());
+            return app_handle
+                .webview_windows()
+                .iter()
+                .next()
+                .map(|(_, w)| w.to_owned())
+                .ok_or(GenericError("No windows open".to_string()));
         }
     };
 
@@ -1508,7 +1627,7 @@ fn get_window_from_window_context<R: Runtime>(
         error!("Failed to find window by {window_context:?}");
     }
 
-    window
+    Ok(window.ok_or(GenericError(format!("Failed to find window for {}", label)))?)
 }
 
 fn workspace_from_window<R: Runtime>(window: &WebviewWindow<R>) -> Option<Workspace> {

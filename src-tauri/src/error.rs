@@ -20,8 +20,12 @@ pub enum Error {
     GitError(#[from] yaak_git::error::Error),
 
     #[error(transparent)]
+    TokioTimeoutElapsed(#[from] tokio::time::error::Elapsed),
+
+    #[error(transparent)]
     WebsocketError(#[from] yaak_ws::error::Error),
 
+    #[cfg(feature = "license")]
     #[error(transparent)]
     LicenseError(#[from] yaak_license::error::Error),
 
@@ -30,6 +34,9 @@ pub enum Error {
 
     #[error(transparent)]
     CommonError(#[from] yaak_common::error::Error),
+
+    #[error(transparent)]
+    ClipboardError(#[from] tauri_plugin_clipboard_manager::Error),
 
     #[error("Updater error: {0}")]
     UpdaterError(#[from] tauri_plugin_updater::Error),

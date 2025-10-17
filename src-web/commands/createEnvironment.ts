@@ -5,7 +5,7 @@ import { jotaiStore } from '../lib/jotai';
 import { showPrompt } from '../lib/prompt';
 import { setWorkspaceSearchParams } from '../lib/setWorkspaceSearchParams';
 
-export const createEnvironmentAndActivate = createFastMutation<
+export const createSubEnvironmentAndActivate = createFastMutation<
   string | null,
   unknown,
   Environment | null
@@ -37,7 +37,8 @@ export const createEnvironmentAndActivate = createFastMutation<
       name,
       variables: [],
       workspaceId,
-      base: false,
+      parentId: baseEnvironment.id,
+      parentModel: 'environment',
     });
   },
   onSuccess: async (environmentId) => {
@@ -45,7 +46,6 @@ export const createEnvironmentAndActivate = createFastMutation<
       return; // Was not created
     }
 
-    console.log('NAVIGATING', jotaiStore.get(activeWorkspaceIdAtom), environmentId);
     setWorkspaceSearchParams({ environment_id: environmentId });
   },
 });

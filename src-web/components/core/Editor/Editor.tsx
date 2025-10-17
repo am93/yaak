@@ -7,7 +7,7 @@ import { emacs } from '@replit/codemirror-emacs';
 import { vim } from '@replit/codemirror-vim';
 
 import { vscodeKeymap } from '@replit/codemirror-vscode-keymap';
-import type { EditorKeymap, EnvironmentVariable } from '@yaakapp-internal/models';
+import type { EditorKeymap } from '@yaakapp-internal/models';
 import { settingsAtom } from '@yaakapp-internal/models';
 import type { EditorLanguage, TemplateFunction } from '@yaakapp-internal/plugins';
 import { parseTemplate } from '@yaakapp-internal/templates';
@@ -24,15 +24,20 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
 } from 'react';
-import { activeEnvironmentIdAtom } from '../../../hooks/useActiveEnvironment';
+import { activeWorkspaceAtom } from '../../../hooks/useActiveWorkspace';
+import type { WrappedEnvironmentVariable } from '../../../hooks/useEnvironmentVariables';
 import { useEnvironmentVariables } from '../../../hooks/useEnvironmentVariables';
+import { useRandomKey } from '../../../hooks/useRandomKey';
 import { useRequestEditor } from '../../../hooks/useRequestEditor';
 import { useTemplateFunctionCompletionOptions } from '../../../hooks/useTemplateFunctions';
 import { showDialog } from '../../../lib/dialog';
+import { editEnvironment } from '../../../lib/editEnvironment';
 import { tryFormatJson, tryFormatXml } from '../../../lib/formatters';
+import { jotaiStore } from '../../../lib/jotai';
 import { withEncryptionEnabled } from '../../../lib/setupOrConfigureEncryption';
 import { TemplateFunctionDialog } from '../../TemplateFunctionDialog';
 import { TemplateVariableDialog } from '../../TemplateVariableDialog';
@@ -65,7 +70,7 @@ export interface EditorProps {
   autoSelect?: boolean;
   autocomplete?: GenericCompletionConfig;
   autocompleteFunctions?: boolean;
-  autocompleteVariables?: boolean;
+  autocompleteVariables?: boolean | ((v: WrappedEnvironmentVariable) => boolean);
   className?: string;
   defaultValue?: string | null;
   disableTabIndent?: boolean;
@@ -96,7 +101,7 @@ export interface EditorProps {
 
 const stateFields = { history: historyField, folds: foldState };
 
-const emptyVariables: EnvironmentVariable[] = [];
+const emptyVariables: WrappedEnvironmentVariable[] = [];
 const emptyExtension: Extension = [];
 
 export const Editor = forwardRef<EditorView | undefined, EditorProps>(function Editor(
@@ -113,7 +118,7 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
     disabled,
     extraExtensions,
     forcedEnvironmentId,
-    forceUpdateKey,
+    forceUpdateKey: forceUpdateKeyFromAbove,
     format,
     heightMode,
     hideGutter,
@@ -136,11 +141,18 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
 ) {
   const settings = useAtomValue(settingsAtom);
 
-  const activeEnvironmentId = useAtomValue(activeEnvironmentIdAtom);
-  const environmentId = forcedEnvironmentId ?? activeEnvironmentId ?? null;
-  const allEnvironmentVariables = useEnvironmentVariables(environmentId);
-  const environmentVariables = autocompleteVariables ? allEnvironmentVariables : emptyVariables;
+  const allEnvironmentVariables = useEnvironmentVariables(forcedEnvironmentId ?? null);
   const useTemplating = !!(autocompleteFunctions || autocompleteVariables || autocomplete);
+  const environmentVariables = useMemo(() => {
+    if (!autocompleteVariables) return emptyVariables;
+    return typeof autocompleteVariables === 'function'
+      ? allEnvironmentVariables.filter(autocompleteVariables)
+      : allEnvironmentVariables;
+  }, [allEnvironmentVariables, autocompleteVariables]);
+  // Track a local key for updates. If the default value is changed when the input is not in focus,
+  // regenerate this to force the field to update.
+  const [focusedUpdateKey, regenerateFocusedUpdateKey] = useRandomKey();
+  const forceUpdateKey = `${forceUpdateKeyFromAbove}::${focusedUpdateKey}`;
 
   if (settings && wrapLines === undefined) {
     wrapLines = settings.editorSoftWrap;
@@ -282,18 +294,22 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
           size: 'md',
           title: <InlineCode>{fn.name}(…)</InlineCode>,
           description: fn.description,
-          render: ({ hide }) => (
-            <TemplateFunctionDialog
-              templateFunction={fn}
-              hide={hide}
-              initialTokens={initialTokens}
-              onChange={(insert) => {
-                cm.current?.view.dispatch({
-                  changes: [{ from: startPos, to: startPos + tagValue.length, insert }],
-                });
-              }}
-            />
-          ),
+          render: ({ hide }) => {
+            const model = jotaiStore.get(activeWorkspaceAtom)!;
+            return (
+              <TemplateFunctionDialog
+                templateFunction={fn}
+                model={model}
+                hide={hide}
+                initialTokens={initialTokens}
+                onChange={(insert) => {
+                  cm.current?.view.dispatch({
+                    changes: [{ from: startPos, to: startPos + tagValue.length, insert }],
+                  });
+                }}
+              />
+            );
+          },
         });
 
       if (fn.name === 'secure') {
@@ -306,24 +322,9 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
   );
 
   const onClickVariable = useCallback(
-    async (_v: EnvironmentVariable, tagValue: string, startPos: number) => {
-      const initialTokens = parseTemplate(tagValue);
-      showDialog({
-        size: 'dynamic',
-        id: 'template-variable',
-        title: 'Change Variable',
-        render: ({ hide }) => (
-          <TemplateVariableDialog
-            hide={hide}
-            initialTokens={initialTokens}
-            onChange={(insert) => {
-              cm.current?.view.dispatch({
-                changes: [{ from: startPos, to: startPos + tagValue.length, insert }],
-              });
-            }}
-          />
-        ),
-      });
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    async (v: WrappedEnvironmentVariable, _tagValue: string, _startPos: number) => {
+      editEnvironment(v.environment);
     },
     [],
   );
@@ -350,6 +351,17 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
     },
     [],
   );
+
+  // Force input to update when receiving change and not in focus
+  useLayoutEffect(() => {
+    const currDoc = cm.current?.view.state.doc.toString() || '';
+    const nextDoc = defaultValue || '';
+    const notFocused = !cm.current?.view.hasFocus;
+    const hasChanged = currDoc !== nextDoc;
+    if (notFocused && hasChanged) {
+      regenerateFocusedUpdateKey();
+    }
+  }, [defaultValue, regenerateFocusedUpdateKey]);
 
   const [, { focusParamValue }] = useRequestEditor();
   const onClickPathParameter = useCallback(

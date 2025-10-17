@@ -32,6 +32,7 @@ use yaak_plugins::events::{
 };
 use yaak_plugins::manager::PluginManager;
 use yaak_plugins::template_callback::PluginTemplateCallback;
+use yaak_templates::{RenderErrorBehavior, RenderOptions};
 
 pub async fn send_http_request<R: Runtime>(
     window: &WebviewWindow<R>,
@@ -43,14 +44,14 @@ pub async fn send_http_request<R: Runtime>(
 ) -> Result<HttpResponse> {
     let app_handle = window.app_handle().clone();
     let plugin_manager = app_handle.state::<PluginManager>();
-    let (settings, workspace) = {
-        let db = window.db();
-        let settings = db.get_settings();
-        let workspace = db.get_workspace(&unrendered_request.workspace_id)?;
-        (settings, workspace)
-    };
-    let base_environment =
-        app_handle.db().get_base_environment(&unrendered_request.workspace_id)?;
+    let settings = window.db().get_settings();
+    let workspace = window.db().get_workspace(&unrendered_request.workspace_id)?;
+    let environment_id = environment.map(|e| e.id);
+    let environment_chain = window.db().resolve_environments(
+        &unrendered_request.workspace_id,
+        unrendered_request.folder_id.as_deref(),
+        environment_id.as_deref(),
+    )?;
 
     let response_id = og_response.id.clone();
     let response = Arc::new(Mutex::new(og_response.clone()));
@@ -76,20 +77,21 @@ pub async fn send_http_request<R: Runtime>(
         RenderPurpose::Send,
     );
 
-    let request =
-        match render_http_request(&resolved_request, &base_environment, environment.as_ref(), &cb)
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                return Ok(response_err(
-                    &app_handle,
-                    &*response.lock().await,
-                    e.to_string(),
-                    &update_source,
-                ));
-            }
-        };
+    let opt = RenderOptions {
+        error_behavior: RenderErrorBehavior::Throw,
+    };
+
+    let request = match render_http_request(&resolved_request, environment_chain, &cb, &opt).await {
+        Ok(r) => r,
+        Err(e) => {
+            return Ok(response_err(
+                &app_handle,
+                &*response.lock().await,
+                e.to_string(),
+                &update_source,
+            ));
+        }
+    };
 
     let mut url_string = request.url.clone();
 
@@ -111,7 +113,7 @@ pub async fn send_http_request<R: Runtime>(
         .referer(false)
         .tls_info(true);
 
-    let tls_config = yaak_http::tls::get_config(workspace.setting_validate_certificates);
+    let tls_config = yaak_http::tls::get_config(workspace.setting_validate_certificates, true);
     client_builder = client_builder.use_preconfigured_tls(tls_config);
 
     match settings.proxy {

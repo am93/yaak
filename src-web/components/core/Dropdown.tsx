@@ -221,7 +221,7 @@ export const Dropdown = forwardRef<DropdownRef, DropdownProps>(function Dropdown
   );
 });
 
-interface ContextMenuProps {
+export interface ContextMenuProps {
   triggerPosition: { x: number; y: number } | null;
   className?: string;
   items: DropdownProps['items'];
@@ -519,7 +519,7 @@ const Menu = forwardRef<Omit<DropdownRef, 'open' | 'isOpen' | 'toggle' | 'items'
               className={classNames(
                 className,
                 'x-theme-menu',
-                'outline-none my-1 pointer-events-auto fixed z-50',
+                'outline-none my-1 pointer-events-auto fixed z-40',
               )}
             >
               {showTriangle && (

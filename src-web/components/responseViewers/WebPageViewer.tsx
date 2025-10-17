@@ -8,7 +8,7 @@ interface Props {
 
 export function WebPageViewer({ response }: Props) {
   const { url } = response;
-  const body = useResponseBodyText(response).data ?? '';
+  const body = useResponseBodyText({ response, filter: null }).data ?? '';
 
   const contentForIframe: string | undefined = useMemo(() => {
     if (body.includes('<head>')) {
@@ -21,10 +21,11 @@ export function WebPageViewer({ response }: Props) {
     <div className="h-full pb-3">
       <iframe
         key={body ? 'has-body' : 'no-body'}
-        title="Response preview"
+        title="Yaak response preview"
         srcDoc={contentForIframe}
-        sandbox="allow-scripts allow-same-origin"
-        className="h-full w-full rounded border border-border-subtle"
+        sandbox="allow-scripts allow-forms"
+        referrerPolicy="no-referrer"
+        className="h-full w-full rounded-lg border border-border-subtle"
       />
     </div>
   );

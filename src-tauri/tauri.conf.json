@@ -15,7 +15,8 @@
         "enable": true,
         "scope": {
           "allow": [
-            "$APPDATA/responses/*"
+            "$APPDATA/responses/*",
+            "$RESOURCE/static/*"
           ]
         }
       }
@@ -28,12 +29,6 @@
           "yaak"
         ]
       }
-    },
-    "updater": {
-      "endpoints": [
-        "https://update.yaak.app/check/{{target}}/{{arch}}/{{current_version}}"
-      ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEMxRDJFREQ1MjExQjdGN0IKUldSN2Z4c2gxZTNTd1FHNCtmYnFXMHVVQzhuNkJOM1cwOFBodmdLall3ckhKenpKUytHSTR1MlkK"
     }
   },
   "bundle": {
@@ -56,6 +51,7 @@
     ],
     "longDescription": "A cross-platform desktop app for interacting with REST, GraphQL, and gRPC",
     "resources": [
+      "static",
       "vendored/protoc/include",
       "vendored/plugins",
       "vendored/plugin-runtime"
