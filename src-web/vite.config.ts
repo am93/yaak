@@ -1,62 +1,59 @@
 // @ts-ignore
-import { TanStackRouterVite } from '@tanstack/router-plugin/vite';
-import react from '@vitejs/plugin-react';
-import reactRefresh from 'eslint-plugin-react-refresh';
-import { internalIpV4 } from 'internal-ip';
-import { createRequire } from 'node:module';
-import path from 'node:path';
-import { defineConfig, normalizePath } from 'vite';
-import { viteStaticCopy } from 'vite-plugin-static-copy';
-import svgr from 'vite-plugin-svgr';
-import topLevelAwait from 'vite-plugin-top-level-await';
-import wasm from 'vite-plugin-wasm';
+import { tanstackRouter } from "@tanstack/router-plugin/vite";
+import babel from "@rolldown/plugin-babel";
+import react, { reactCompilerPreset } from "@vitejs/plugin-react";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { defineConfig, normalizePath } from "vite-plus";
+import { viteStaticCopy } from "vite-plugin-static-copy";
+import svgr from "vite-plugin-svgr";
 
 const require = createRequire(import.meta.url);
 const cMapsDir = normalizePath(
-  path.join(path.dirname(require.resolve('pdfjs-dist/package.json')), 'cmaps'),
+  path.join(path.dirname(require.resolve("pdfjs-dist/package.json")), "cmaps"),
 );
 const standardFontsDir = normalizePath(
-  path.join(path.dirname(require.resolve('pdfjs-dist/package.json')), 'standard_fonts'),
+  path.join(path.dirname(require.resolve("pdfjs-dist/package.json")), "standard_fonts"),
 );
 
-const mobile = !!/android|ios/.exec(process.env.TAURI_ENV_PLATFORM ?? '');
-
 // https://vitejs.dev/config/
-export default defineConfig(async () => ({
+export default defineConfig({
   plugins: [
-    wasm(),
-    reactRefresh.configs.vite,
-    TanStackRouterVite({
-      routesDirectory: './routes',
-      generatedRouteTree: './routeTree.gen.ts',
+    tanstackRouter({
+      target: "react",
+      routesDirectory: "./routes",
+      generatedRouteTree: "./routeTree.gen.ts",
       autoCodeSplitting: true,
     }),
     svgr(),
     react(),
-    topLevelAwait(),
+    babel({
+      presets: [reactCompilerPreset()],
+    }),
     viteStaticCopy({
       targets: [
-        { src: cMapsDir, dest: '' },
-        { src: standardFontsDir, dest: '' },
+        { src: cMapsDir, dest: "" },
+        { src: standardFontsDir, dest: "" },
       ],
     }),
   ],
   build: {
-    outDir: '../dist',
+    sourcemap: true,
+    outDir: "../dist",
     emptyOutDir: true,
+    rolldownOptions: {
+      output: {
+        // Make chunk names readable
+        chunkFileNames: "assets/chunk-[name]-[hash].js",
+        entryFileNames: "assets/entry-[name]-[hash].js",
+        assetFileNames: "assets/asset-[name]-[hash][extname]",
+      },
+    },
   },
   clearScreen: false,
   server: {
-    port: 1420,
+    port: parseInt(process.env.YAAK_DEV_PORT ?? "1420", 10),
     strictPort: true,
-    host: mobile ? '0.0.0.0' : false,
-    hmr: mobile
-      ? {
-          protocol: 'ws',
-          host: await internalIpV4(),
-          port: 1421,
-        }
-      : undefined,
   },
-  envPrefix: ['VITE_', 'TAURI_'],
-}));
+  envPrefix: ["VITE_", "TAURI_"],
+});

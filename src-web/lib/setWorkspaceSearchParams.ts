@@ -1,6 +1,6 @@
-import type { Folder, GrpcRequest, WebsocketRequest, Workspace } from '@yaakapp-internal/models';
-import type { HttpRequest } from '@yaakapp-internal/sync';
-import { router } from './router.js';
+import type { Folder, GrpcRequest, WebsocketRequest, Workspace } from "@yaakapp-internal/models";
+import type { HttpRequest } from "@yaakapp-internal/sync";
+import { router } from "./router.js";
 
 /**
  * Setting search params using "from" on the global router instance in tanstack router does not
@@ -15,23 +15,31 @@ export function setWorkspaceSearchParams(
     folder_id: string | null;
   }>,
 ) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (router as any).navigate({
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    search: (prev: any) => {
-      console.log('Navigating to', { prev, search });
-      return { ...prev, ...search };
-    },
-  });
+  // oxlint-disable-next-line no-explicit-any
+  (router as any)
+    .navigate({
+      // oxlint-disable-next-line no-explicit-any
+      search: (prev: any) => {
+        // console.log('Navigating to', { prev, search });
+        const o = { ...prev, ...search };
+        for (const k of Object.keys(o)) {
+          if (o[k] == null) {
+            delete o[k];
+          }
+        }
+        return o;
+      },
+    })
+    .catch(console.error);
 }
 
 export function navigateToRequestOrFolderOrWorkspace(
   id: string,
-  model: (Workspace | Folder | HttpRequest | GrpcRequest | WebsocketRequest)['model'],
+  model: (Workspace | Folder | HttpRequest | GrpcRequest | WebsocketRequest)["model"],
 ) {
-  if (model === 'workspace') {
+  if (model === "workspace") {
     setWorkspaceSearchParams({ request_id: null, folder_id: null });
-  } else if (model === 'folder') {
+  } else if (model === "folder") {
     setWorkspaceSearchParams({ request_id: null, folder_id: id });
   } else {
     setWorkspaceSearchParams({ request_id: id, folder_id: null });

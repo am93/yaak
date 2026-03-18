@@ -1,35 +1,39 @@
-import type { EditorView } from '@codemirror/view';
-import type { HttpRequest } from '@yaakapp-internal/models';
+import type { HttpRequest } from "@yaakapp-internal/models";
 
-import { formatSdl } from 'format-graphql';
-import { useAtom } from 'jotai';
-import { useMemo, useRef } from 'react';
-import { useLocalStorage } from 'react-use';
-import { useIntrospectGraphQL } from '../../hooks/useIntrospectGraphQL';
-import { useStateWithDeps } from '../../hooks/useStateWithDeps';
-import { showDialog } from '../../lib/dialog';
-import { Banner } from '../core/Banner';
-import { Button } from '../core/Button';
-import type { DropdownItem } from '../core/Dropdown';
-import { Dropdown } from '../core/Dropdown';
-import type { EditorProps } from '../core/Editor/Editor';
-import { Editor } from '../core/Editor/Editor';
-import { FormattedError } from '../core/FormattedError';
-import { Icon } from '../core/Icon';
-import { Separator } from '../core/Separator';
-import { showGraphQLDocExplorerAtom } from './graphqlAtoms';
+import { useAtom } from "jotai";
+import { useCallback, useMemo } from "react";
+import { useLocalStorage } from "react-use";
+import { useIntrospectGraphQL } from "../../hooks/useIntrospectGraphQL";
+import { useStateWithDeps } from "../../hooks/useStateWithDeps";
+import { showDialog } from "../../lib/dialog";
+import { Banner } from "../core/Banner";
+import { Button } from "../core/Button";
+import type { DropdownItem } from "../core/Dropdown";
+import { Dropdown } from "../core/Dropdown";
+import type { EditorProps } from "../core/Editor/Editor";
+import { Editor } from "../core/Editor/LazyEditor";
+import { FormattedError } from "../core/FormattedError";
+import { Icon } from "../core/Icon";
+import { Separator } from "../core/Separator";
+import { tryFormatGraphql } from "../../lib/formatters";
+import { showGraphQLDocExplorerAtom } from "./graphqlAtoms";
 
-type Props = Pick<EditorProps, 'heightMode' | 'className' | 'forceUpdateKey'> & {
+type Props = Pick<EditorProps, "heightMode" | "className" | "forceUpdateKey"> & {
   baseRequest: HttpRequest;
-  onChange: (body: HttpRequest['body']) => void;
+  onChange: (body: HttpRequest["body"]) => void;
   request: HttpRequest;
 };
 
-export function GraphQLEditor({ request, onChange, baseRequest, ...extraEditorProps }: Props) {
-  const editorViewRef = useRef<EditorView>(null);
+export function GraphQLEditor(props: Props) {
+  // There's some weirdness with stale onChange being called when switching requests, so we'll
+  // key on the request ID as a workaround for now.
+  return <GraphQLEditorInner key={props.request.id} {...props} />;
+}
+
+function GraphQLEditorInner({ request, onChange, baseRequest, ...extraEditorProps }: Props) {
   const [autoIntrospectDisabled, setAutoIntrospectDisabled] = useLocalStorage<
     Record<string, boolean>
-  >('graphQLAutoIntrospectDisabled', {});
+  >("graphQLAutoIntrospectDisabled", {});
   const { schema, isLoading, error, refetch, clear } = useIntrospectGraphQL(baseRequest, {
     disabled: autoIntrospectDisabled?.[baseRequest.id],
   });
@@ -39,30 +43,41 @@ export function GraphQLEditor({ request, onChange, baseRequest, ...extraEditorPr
   }>(() => {
     // Migrate text bodies to GraphQL format
     // NOTE: This is how GraphQL used to be stored
-    if ('text' in request.body) {
+    if ("text" in request.body) {
       const b = tryParseJson(request.body.text, {});
       const variables = JSON.stringify(b.variables || undefined, null, 2);
-      return { query: b.query ?? '', variables };
+      return { query: b.query ?? "", variables };
     }
 
-    return { query: request.body.query ?? '', variables: request.body.variables ?? '' };
+    return { query: request.body.query ?? "", variables: request.body.variables ?? "" };
   }, [extraEditorProps.forceUpdateKey]);
+
   const [isDocOpenRecord, setGraphqlDocStateAtomValue] = useAtom(showGraphQLDocExplorerAtom);
   const isDocOpen = isDocOpenRecord[request.id] !== undefined;
 
-  const handleChangeQuery = (query: string) => {
-    const newBody = { query, variables: currentBody.variables || undefined };
-    setCurrentBody(newBody);
-    onChange(newBody);
-  };
+  const handleChangeQuery = useCallback(
+    (query: string) => {
+      setCurrentBody(({ variables }) => {
+        const newBody = { query, variables };
+        onChange(newBody);
+        return newBody;
+      });
+    },
+    [onChange, setCurrentBody],
+  );
 
-  const handleChangeVariables = (variables: string) => {
-    const newBody = { query: currentBody.query, variables: variables || undefined };
-    setCurrentBody(newBody);
-    onChange(newBody);
-  };
+  const handleChangeVariables = useCallback(
+    (variables: string) => {
+      setCurrentBody(({ query }) => {
+        const newBody = { query, variables: variables || undefined };
+        onChange(newBody);
+        return newBody;
+      });
+    },
+    [onChange, setCurrentBody],
+  );
 
-  const actions = useMemo<EditorProps['actions']>(
+  const actions = useMemo<EditorProps["actions"]>(
     () => [
       <div key="actions" className="flex flex-row !opacity-100 !shadow">
         <div key="introspection" className="!opacity-100">
@@ -72,12 +87,12 @@ export function GraphQLEditor({ request, onChange, baseRequest, ...extraEditorPr
                 ...((schema != null
                   ? [
                       {
-                        label: 'Clear',
+                        label: "Clear",
                         onSelect: clear,
-                        color: 'danger',
+                        color: "danger",
                         leftSlot: <Icon icon="trash" />,
                       },
-                      { type: 'separator' },
+                      { type: "separator" },
                     ]
                   : []) satisfies DropdownItem[]),
                 {
@@ -91,12 +106,12 @@ export function GraphQLEditor({ request, onChange, baseRequest, ...extraEditorPr
                         variant="border"
                         onClick={() => {
                           showDialog({
-                            title: 'Introspection Failed',
-                            size: 'sm',
-                            id: 'introspection-failed',
+                            title: "Introspection Failed",
+                            size: "sm",
+                            id: "introspection-failed",
                             render: ({ hide }) => (
                               <>
-                                <FormattedError>{error ?? 'unknown'}</FormattedError>
+                                <FormattedError>{error ?? "unknown"}</FormattedError>
                                 <div className="w-full my-4">
                                   <Button
                                     onClick={async () => {
@@ -119,11 +134,11 @@ export function GraphQLEditor({ request, onChange, baseRequest, ...extraEditorPr
                       </Button>
                     </Banner>
                   ),
-                  type: 'content',
+                  type: "content",
                 },
                 {
                   hidden: schema == null,
-                  label: `${isDocOpen ? 'Hide' : 'Show'} Documentation`,
+                  label: `${isDocOpen ? "Hide" : "Show"} Documentation`,
                   leftSlot: <Icon icon="book_open_text" />,
                   onSelect: () => {
                     setGraphqlDocStateAtomValue((v) => ({
@@ -133,14 +148,15 @@ export function GraphQLEditor({ request, onChange, baseRequest, ...extraEditorPr
                   },
                 },
                 {
-                  label: 'Introspect Schema',
+                  label: "Introspect Schema",
                   leftSlot: <Icon icon="refresh" spin={isLoading} />,
                   keepOpenOnSelect: true,
                   onSelect: refetch,
                 },
-                { type: 'separator', label: 'Setting' },
+                { type: "separator", label: "Setting" },
                 {
-                  label: 'Automatic Introspection',
+                  label: "Automatic Introspection",
+                  keepOpenOnSelect: true,
                   onSelect: () => {
                     setAutoIntrospectDisabled({
                       ...autoIntrospectDisabled,
@@ -151,8 +167,8 @@ export function GraphQLEditor({ request, onChange, baseRequest, ...extraEditorPr
                     <Icon
                       icon={
                         autoIntrospectDisabled?.[baseRequest.id]
-                          ? 'check_square_unchecked'
-                          : 'check_square_checked'
+                          ? "check_square_unchecked"
+                          : "check_square_checked"
                       }
                     />
                   ),
@@ -164,10 +180,10 @@ export function GraphQLEditor({ request, onChange, baseRequest, ...extraEditorPr
                 variant="border"
                 title="Refetch Schema"
                 isLoading={isLoading}
-                color={error ? 'danger' : 'default'}
+                color={error ? "danger" : "default"}
                 forDropdown
               >
-                {error ? 'Introspection Failed' : schema ? 'Schema' : 'No Schema'}
+                {error ? "Introspection Failed" : schema ? "Schema" : "No Schema"}
               </Button>
             </Dropdown>
           )}
@@ -195,13 +211,12 @@ export function GraphQLEditor({ request, onChange, baseRequest, ...extraEditorPr
         language="graphql"
         heightMode="auto"
         graphQLSchema={schema}
-        format={formatSdl}
+        format={tryFormatGraphql}
         defaultValue={currentBody.query}
         onChange={handleChangeQuery}
         placeholder="..."
-        ref={editorViewRef}
         actions={actions}
-        stateKey={'graphql_body.' + request.id}
+        stateKey={`graphql_body.${request.id}`}
         {...extraEditorProps}
       />
       <div className="grid grid-rows-[auto_minmax(0,1fr)] grid-cols-1 min-h-[5rem]">
@@ -214,7 +229,7 @@ export function GraphQLEditor({ request, onChange, baseRequest, ...extraEditorPr
           defaultValue={currentBody.variables}
           onChange={handleChangeVariables}
           placeholder="{}"
-          stateKey={'graphql_vars.' + request.id}
+          stateKey={`graphql_vars.${request.id}`}
           autocompleteFunctions
           autocompleteVariables
           {...extraEditorProps}
@@ -227,8 +242,7 @@ export function GraphQLEditor({ request, onChange, baseRequest, ...extraEditorPr
 function tryParseJson(text: string, fallback: unknown) {
   try {
     return JSON.parse(text);
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  } catch (err) {
+  } catch {
     return fallback;
   }
 }

@@ -1,24 +1,26 @@
 # Developer Setup
 
-Yaak is a combined Node.js and Rust monorepo. It is a [Tauri](https://tauri.app) project, so 
+Yaak is a combined Node.js and Rust monorepo. It is a [Tauri](https://tauri.app) project, so
 uses Rust and HTML/CSS/JS for the main application but there is also a plugin system powered
 by a Node.js sidecar that communicates to the app over gRPC.
 
-Because of the moving parts, there are a few setup steps required before development can 
+Because of the moving parts, there are a few setup steps required before development can
 begin.
 
 ## Prerequisites
 
 Make sure you have the following tools installed:
 
-- [Node.js](https://nodejs.org/en/download/package-manager)
+- [Node.js](https://nodejs.org/en/download/package-manager) (v24+)
 - [Rust](https://www.rust-lang.org/tools/install)
+- [Vite+](https://vite.dev/guide/vite-plus) (`vp` CLI)
 
 Check the installations with the following commands:
 
 ```shell
 node -v
 npm -v
+vp --version
 rustc --version
 ```
 
@@ -45,18 +47,40 @@ npm start
 ## SQLite Migrations
 
 New migrations can be created from the `src-tauri/` directory:
-   
+
 ```shell
 npm run migration
 ```
 
-Rerun the app to apply the migrations. 
+Rerun the app to apply the migrations.
 
 _Note: For safety, development builds use a separate database location from production builds._
 
-## Lezer Grammer Generation
+## Lezer Grammar Generation
 
 ```sh
 # Example
 lezer-generator components/core/Editor/<LANG>/<LANG>.grammar > components/core/Editor/<LANG>/<LANG>.ts
 ```
+
+## Linting and Formatting
+
+This repo uses [Vite+](https://vite.dev/guide/vite-plus) for linting (oxlint) and formatting (oxfmt).
+
+- Lint the entire repo:
+
+```sh
+npm run lint
+```
+
+- Format code:
+
+```sh
+npm run format
+```
+
+Notes:
+
+- A pre-commit hook runs `vp lint` automatically on commit.
+- Some workspace packages also run `tsc --noEmit` for type-checking.
+- VS Code users should install the recommended extensions for format-on-save support.

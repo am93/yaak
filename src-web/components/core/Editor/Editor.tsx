@@ -1,61 +1,56 @@
-import { defaultKeymap, historyField, indentWithTab } from '@codemirror/commands';
-import { foldState, forceParsing } from '@codemirror/language';
-import type { EditorStateConfig, Extension } from '@codemirror/state';
-import { Compartment, EditorState } from '@codemirror/state';
-import { EditorView, keymap, placeholder as placeholderExt, tooltips } from '@codemirror/view';
-import { emacs } from '@replit/codemirror-emacs';
-import { vim } from '@replit/codemirror-vim';
+import { startCompletion } from "@codemirror/autocomplete";
+import { defaultKeymap, historyField, indentWithTab } from "@codemirror/commands";
+import { foldState, forceParsing } from "@codemirror/language";
+import type { EditorStateConfig, Extension } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
+import { EditorView, keymap, placeholder as placeholderExt, tooltips } from "@codemirror/view";
+import { emacs } from "@replit/codemirror-emacs";
+import { vim } from "@replit/codemirror-vim";
 
-import { vscodeKeymap } from '@replit/codemirror-vscode-keymap';
-import type { EditorKeymap } from '@yaakapp-internal/models';
-import { settingsAtom } from '@yaakapp-internal/models';
-import type { EditorLanguage, TemplateFunction } from '@yaakapp-internal/plugins';
-import { parseTemplate } from '@yaakapp-internal/templates';
-import classNames from 'classnames';
-import type { GraphQLSchema } from 'graphql';
-import { useAtomValue } from 'jotai';
-import { md5 } from 'js-md5';
-import type { ReactNode, RefObject } from 'react';
+import { vscodeKeymap } from "@replit/codemirror-vscode-keymap";
+import type { EditorKeymap } from "@yaakapp-internal/models";
+import { settingsAtom } from "@yaakapp-internal/models";
+import type { EditorLanguage, TemplateFunction } from "@yaakapp-internal/plugins";
+import classNames from "classnames";
+import type { GraphQLSchema } from "graphql";
+import { useAtomValue } from "jotai";
+import { md5 } from "js-md5";
+import type { ReactNode, RefObject } from "react";
 import {
   Children,
   cloneElement,
-  forwardRef,
   isValidElement,
   useCallback,
   useEffect,
-  useImperativeHandle,
   useLayoutEffect,
   useMemo,
   useRef,
-} from 'react';
-import { activeWorkspaceAtom } from '../../../hooks/useActiveWorkspace';
-import type { WrappedEnvironmentVariable } from '../../../hooks/useEnvironmentVariables';
-import { useEnvironmentVariables } from '../../../hooks/useEnvironmentVariables';
-import { useRandomKey } from '../../../hooks/useRandomKey';
-import { useRequestEditor } from '../../../hooks/useRequestEditor';
-import { useTemplateFunctionCompletionOptions } from '../../../hooks/useTemplateFunctions';
-import { showDialog } from '../../../lib/dialog';
-import { editEnvironment } from '../../../lib/editEnvironment';
-import { tryFormatJson, tryFormatXml } from '../../../lib/formatters';
-import { jotaiStore } from '../../../lib/jotai';
-import { withEncryptionEnabled } from '../../../lib/setupOrConfigureEncryption';
-import { TemplateFunctionDialog } from '../../TemplateFunctionDialog';
-import { TemplateVariableDialog } from '../../TemplateVariableDialog';
-import { IconButton } from '../IconButton';
-import { InlineCode } from '../InlineCode';
-import { HStack } from '../Stacks';
-import './Editor.css';
+} from "react";
+import { activeEnvironmentAtom } from "../../../hooks/useActiveEnvironment";
+import type { WrappedEnvironmentVariable } from "../../../hooks/useEnvironmentVariables";
+import { useEnvironmentVariables } from "../../../hooks/useEnvironmentVariables";
+import { eventMatchesHotkey } from "../../../hooks/useHotKey";
+import { useRequestEditor } from "../../../hooks/useRequestEditor";
+import { useTemplateFunctionCompletionOptions } from "../../../hooks/useTemplateFunctions";
+import { editEnvironment } from "../../../lib/editEnvironment";
+import { tryFormatJson, tryFormatXml } from "../../../lib/formatters";
+import { jotaiStore } from "../../../lib/jotai";
+import { withEncryptionEnabled } from "../../../lib/setupOrConfigureEncryption";
+import { TemplateFunctionDialog } from "../../TemplateFunctionDialog";
+import { IconButton } from "../IconButton";
+import { HStack } from "../Stacks";
+import "./Editor.css";
 import {
   baseExtensions,
   getLanguageExtension,
   multiLineExtensions,
   readonlyExtensions,
-} from './extensions';
-import type { GenericCompletionConfig } from './genericCompletion';
-import { singleLineExtensions } from './singleLine';
+} from "./extensions";
+import type { GenericCompletionConfig } from "./genericCompletion";
+import { singleLineExtensions } from "./singleLine";
 
 // VSCode's Tab actions mess with the single-line editor tab actions, so remove it.
-const vsCodeWithoutTab = vscodeKeymap.filter((k) => k.key !== 'Tab');
+const vsCodeWithoutTab = vscodeKeymap.filter((k) => k.key !== "Tab");
 
 const keymapExtensions: Record<EditorKeymap, Extension> = {
   vim: vim(),
@@ -75,14 +70,15 @@ export interface EditorProps {
   defaultValue?: string | null;
   disableTabIndent?: boolean;
   disabled?: boolean;
-  extraExtensions?: Extension[];
+  extraExtensions?: Extension[] | Extension;
   forcedEnvironmentId?: string;
   forceUpdateKey?: string | number;
   format?: (v: string) => Promise<string>;
-  heightMode?: 'auto' | 'full';
+  heightMode?: "auto" | "full";
   hideGutter?: boolean;
   id?: string;
-  language?: EditorLanguage | 'pairs' | 'url';
+  language?: EditorLanguage | "pairs" | "url" | "timeline" | null;
+  lintExtension?: Extension;
   graphQLSchema?: GraphQLSchema | null;
   onBlur?: () => void;
   onChange?: (value: string) => void;
@@ -93,10 +89,12 @@ export interface EditorProps {
   placeholder?: string;
   readOnly?: boolean;
   singleLine?: boolean;
+  containerOnly?: boolean;
   stateKey: string | null;
   tooltipContainer?: HTMLElement;
-  type?: 'text' | 'password';
+  type?: "text" | "password";
   wrapLines?: boolean;
+  setRef?: (view: EditorView | null) => void;
 }
 
 const stateFields = { history: historyField, folds: foldState };
@@ -104,55 +102,55 @@ const stateFields = { history: historyField, folds: foldState };
 const emptyVariables: WrappedEnvironmentVariable[] = [];
 const emptyExtension: Extension = [];
 
-export const Editor = forwardRef<EditorView | undefined, EditorProps>(function Editor(
-  {
-    actions,
-    autoFocus,
-    autoSelect,
-    autocomplete,
-    autocompleteFunctions,
-    autocompleteVariables,
-    className,
-    defaultValue,
-    disableTabIndent,
-    disabled,
-    extraExtensions,
-    forcedEnvironmentId,
-    forceUpdateKey: forceUpdateKeyFromAbove,
-    format,
-    heightMode,
-    hideGutter,
-    graphQLSchema,
-    language,
-    onBlur,
-    onChange,
-    onFocus,
-    onKeyDown,
-    onPaste,
-    onPasteOverwrite,
-    placeholder,
-    readOnly,
-    singleLine,
-    stateKey,
-    type,
-    wrapLines,
-  }: EditorProps,
-  ref,
-) {
+export function Editor(props: EditorProps) {
+  return <EditorInner key={props.stateKey} {...props} />;
+}
+
+function EditorInner({
+  actions,
+  autoFocus,
+  autoSelect,
+  autocomplete,
+  autocompleteFunctions,
+  autocompleteVariables,
+  className,
+  defaultValue,
+  disableTabIndent,
+  disabled,
+  extraExtensions,
+  forcedEnvironmentId,
+  forceUpdateKey,
+  format,
+  heightMode,
+  hideGutter,
+  graphQLSchema,
+  language,
+  lintExtension,
+  onBlur,
+  onChange,
+  onFocus,
+  onKeyDown,
+  onPaste,
+  onPasteOverwrite,
+  placeholder,
+  readOnly,
+  singleLine,
+  containerOnly,
+  stateKey,
+  type,
+  wrapLines,
+  setRef,
+}: EditorProps) {
   const settings = useAtomValue(settingsAtom);
 
   const allEnvironmentVariables = useEnvironmentVariables(forcedEnvironmentId ?? null);
   const useTemplating = !!(autocompleteFunctions || autocompleteVariables || autocomplete);
   const environmentVariables = useMemo(() => {
     if (!autocompleteVariables) return emptyVariables;
-    return typeof autocompleteVariables === 'function'
+    return typeof autocompleteVariables === "function"
       ? allEnvironmentVariables.filter(autocompleteVariables)
       : allEnvironmentVariables;
   }, [allEnvironmentVariables, autocompleteVariables]);
-  // Track a local key for updates. If the default value is changed when the input is not in focus,
-  // regenerate this to force the field to update.
-  const [focusedUpdateKey, regenerateFocusedUpdateKey] = useRandomKey();
-  const forceUpdateKey = `${forceUpdateKeyFromAbove}::${focusedUpdateKey}`;
 
   if (settings && wrapLines === undefined) {
     wrapLines = settings.editorSoftWrap;
@@ -165,57 +163,56 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
   if (
     singleLine ||
     language == null ||
-    language === 'text' ||
-    language === 'url' ||
-    language === 'pairs'
+    language === "text" ||
+    language === "url" ||
+    language === "pairs"
   ) {
     disableTabIndent = true;
   }
 
   if (format == null && !readOnly) {
     format =
-      language === 'json'
+      language === "json"
         ? tryFormatJson
-        : language === 'xml' || language === 'html'
+        : language === "xml" || language === "html"
           ? tryFormatXml
           : undefined;
   }
 
   const cm = useRef<{ view: EditorView; languageCompartment: Compartment } | null>(null);
-  useImperativeHandle(ref, () => cm.current?.view, []);
 
   // Use ref so we can update the handler without re-initializing the editor
-  const handleChange = useRef<EditorProps['onChange']>(onChange);
+  const handleChange = useRef<EditorProps["onChange"]>(onChange);
   useEffect(() => {
     handleChange.current = onChange;
   }, [onChange]);
 
   // Use ref so we can update the handler without re-initializing the editor
-  const handlePaste = useRef<EditorProps['onPaste']>(onPaste);
+  const handlePaste = useRef<EditorProps["onPaste"]>(onPaste);
   useEffect(() => {
     handlePaste.current = onPaste;
   }, [onPaste]);
 
   // Use ref so we can update the handler without re-initializing the editor
-  const handlePasteOverwrite = useRef<EditorProps['onPasteOverwrite']>(onPasteOverwrite);
+  const handlePasteOverwrite = useRef<EditorProps["onPasteOverwrite"]>(onPasteOverwrite);
   useEffect(() => {
     handlePasteOverwrite.current = onPasteOverwrite;
   }, [onPasteOverwrite]);
 
   // Use ref so we can update the handler without re-initializing the editor
-  const handleFocus = useRef<EditorProps['onFocus']>(onFocus);
+  const handleFocus = useRef<EditorProps["onFocus"]>(onFocus);
   useEffect(() => {
     handleFocus.current = onFocus;
   }, [onFocus]);
 
   // Use ref so we can update the handler without re-initializing the editor
-  const handleBlur = useRef<EditorProps['onBlur']>(onBlur);
+  const handleBlur = useRef<EditorProps["onBlur"]>(onBlur);
   useEffect(() => {
     handleBlur.current = onBlur;
   }, [onBlur]);
 
   // Use ref so we can update the handler without re-initializing the editor
-  const handleKeyDown = useRef<EditorProps['onKeyDown']>(onKeyDown);
+  const handleKeyDown = useRef<EditorProps["onKeyDown"]>(onKeyDown);
   useEffect(() => {
     handleKeyDown.current = onKeyDown;
   }, [onKeyDown]);
@@ -229,7 +226,7 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
       const effects = placeholderCompartment.current.reconfigure(ext);
       cm.current?.view.dispatch({ effects });
     },
-    [placeholder, type],
+    [placeholder],
   );
 
   // Update vim
@@ -239,12 +236,12 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
       if (cm.current === null) return;
       const current = keymapCompartment.current.get(cm.current.view.state) ?? [];
       // PERF: This is expensive with hundreds of editors on screen, so only do it when necessary
-      if (settings.editorKeymap === 'default' && current === keymapExtensions['default']) return; // Nothing to do
-      if (settings.editorKeymap === 'vim' && current === keymapExtensions['vim']) return; // Nothing to do
-      if (settings.editorKeymap === 'vscode' && current === keymapExtensions['vscode']) return; // Nothing to do
-      if (settings.editorKeymap === 'emacs' && current === keymapExtensions['emacs']) return; // Nothing to do
+      if (settings.editorKeymap === "default" && current === keymapExtensions.default) return; // Nothing to do
+      if (settings.editorKeymap === "vim" && current === keymapExtensions.vim) return; // Nothing to do
+      if (settings.editorKeymap === "vscode" && current === keymapExtensions.vscode) return; // Nothing to do
+      if (settings.editorKeymap === "emacs" && current === keymapExtensions.emacs) return; // Nothing to do
 
-      const ext = keymapExtensions[settings.editorKeymap] ?? keymapExtensions['default'];
+      const ext = keymapExtensions[settings.editorKeymap] ?? keymapExtensions.default;
       const effects = keymapCompartment.current.reconfigure(ext);
       cm.current.view.dispatch({ effects });
     },
@@ -287,32 +284,12 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
 
   const onClickFunction = useCallback(
     async (fn: TemplateFunction, tagValue: string, startPos: number) => {
-      const initialTokens = parseTemplate(tagValue);
-      const show = () =>
-        showDialog({
-          id: 'template-function-' + Math.random(), // Allow multiple at once
-          size: 'md',
-          title: <InlineCode>{fn.name}(…)</InlineCode>,
-          description: fn.description,
-          render: ({ hide }) => {
-            const model = jotaiStore.get(activeWorkspaceAtom)!;
-            return (
-              <TemplateFunctionDialog
-                templateFunction={fn}
-                model={model}
-                hide={hide}
-                initialTokens={initialTokens}
-                onChange={(insert) => {
-                  cm.current?.view.dispatch({
-                    changes: [{ from: startPos, to: startPos + tagValue.length, insert }],
-                  });
-                }}
-              />
-            );
-          },
-        });
+      const show = () => {
+        if (cm.current === null) return;
+        TemplateFunctionDialog.show(fn, tagValue, startPos, cm.current.view);
+      };
 
-      if (fn.name === 'secure') {
+      if (fn.name === "secure") {
         withEncryptionEnabled(show);
       } else {
         show();
@@ -324,44 +301,17 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
   const onClickVariable = useCallback(
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     async (v: WrappedEnvironmentVariable, _tagValue: string, _startPos: number) => {
-      editEnvironment(v.environment);
+      await editEnvironment(v.environment, { addOrFocusVariable: v.variable });
     },
     [],
   );
 
-  const onClickMissingVariable = useCallback(
-    async (_name: string, tagValue: string, startPos: number) => {
-      const initialTokens = parseTemplate(tagValue);
-      showDialog({
-        size: 'dynamic',
-        id: 'template-variable',
-        title: 'Configure Variable',
-        render: ({ hide }) => (
-          <TemplateVariableDialog
-            hide={hide}
-            initialTokens={initialTokens}
-            onChange={(insert) => {
-              cm.current?.view.dispatch({
-                changes: [{ from: startPos, to: startPos + tagValue.length, insert }],
-              });
-            }}
-          />
-        ),
-      });
-    },
-    [],
-  );
-
-  // Force input to update when receiving change and not in focus
-  useLayoutEffect(() => {
-    const currDoc = cm.current?.view.state.doc.toString() || '';
-    const nextDoc = defaultValue || '';
-    const notFocused = !cm.current?.view.hasFocus;
-    const hasChanged = currDoc !== nextDoc;
-    if (notFocused && hasChanged) {
-      regenerateFocusedUpdateKey();
-    }
-  }, [defaultValue, regenerateFocusedUpdateKey]);
+  const onClickMissingVariable = useCallback(async (name: string) => {
+    const activeEnvironment = jotaiStore.get(activeEnvironmentAtom);
+    await editEnvironment(activeEnvironment, {
+      addOrFocusVariable: { name, value: "", enabled: true },
+    });
+  }, []);
 
   const [, { focusParamValue }] = useRequestEditor();
   const onClickPathParameter = useCallback(
@@ -377,12 +327,15 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
   );
 
   // Update the language extension when the language changes
+  // oxlint-disable-next-line react-hooks/exhaustive-deps -- intentionally limited deps
   useEffect(() => {
     if (cm.current === null) return;
     const { view, languageCompartment } = cm.current;
     const ext = getLanguageExtension({
       useTemplating,
       language,
+      lintExtension,
+      hideGutter,
       environmentVariables,
       autocomplete,
       completionOptions,
@@ -394,6 +347,7 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
     view.dispatch({ effects: languageCompartment.reconfigure(ext) });
   }, [
     language,
+    lintExtension,
     autocomplete,
     environmentVariables,
     onClickFunction,
@@ -403,9 +357,11 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
     completionOptions,
     useTemplating,
     graphQLSchema,
+    hideGutter,
   ]);
 
   // Initialize the editor when ref mounts
+  // oxlint-disable-next-line react-hooks/exhaustive-deps -- only reinitialize when necessary
   const initEditorRef = useCallback(
     function initEditorRef(container: HTMLDivElement | null) {
       if (container === null) {
@@ -419,6 +375,7 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
         const langExt = getLanguageExtension({
           useTemplating,
           language,
+          lintExtension,
           completionOptions,
           autocomplete,
           environmentVariables,
@@ -435,7 +392,7 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
             !disableTabIndent ? keymap.of([indentWithTab]) : emptyExtension,
           ),
           keymapCompartment.current.of(
-            keymapExtensions[settings.editorKeymap] ?? keymapExtensions['default'],
+            keymapExtensions[settings.editorKeymap] ?? keymapExtensions.default,
           ),
           ...getExtensions({
             container,
@@ -450,12 +407,16 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
             onBlur: handleBlur,
             onKeyDown: handleKeyDown,
           }),
-          ...(extraExtensions ?? []),
+          ...(Array.isArray(extraExtensions)
+            ? extraExtensions
+            : extraExtensions
+              ? [extraExtensions]
+              : []),
         ];
 
-        const cachedJsonState = getCachedEditorState(defaultValue ?? '', stateKey);
+        const cachedJsonState = getCachedEditorState(defaultValue ?? "", stateKey);
 
-        const doc = `${defaultValue ?? ''}`;
+        const doc = `${defaultValue ?? ""}`;
         const config: EditorStateConfig = { extensions, doc };
 
         const state = cachedJsonState
@@ -476,49 +437,40 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
         if (autoSelect) {
           view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
         }
+        setRef?.(view);
       } catch (e) {
-        console.log('Failed to initialize Codemirror', e);
+        console.log("Failed to initialize Codemirror", e);
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [forceUpdateKey],
   );
 
   // For read-only mode, update content when `defaultValue` changes
   useEffect(
     function updateReadOnlyEditor() {
-      if (!readOnly || cm.current?.view == null || defaultValue == null) return;
-
-      // Replace codemirror contents
-      const currentDoc = cm.current.view.state.doc.toString();
-      if (defaultValue.startsWith(currentDoc)) {
-        // If we're just appending, append only the changes. This preserves
-        // things like scroll position.
-        cm.current.view.dispatch({
-          changes: cm.current.view.state.changes({
-            from: currentDoc.length,
-            insert: defaultValue.slice(currentDoc.length),
-          }),
-        });
-      } else {
-        // If we're replacing everything, reset the entire content
-        cm.current.view.dispatch({
-          changes: cm.current.view.state.changes({
-            from: 0,
-            to: currentDoc.length,
-            insert: defaultValue,
-          }),
-        });
+      if (readOnly && cm.current?.view != null) {
+        updateContents(cm.current.view, defaultValue || "");
       }
     },
     [defaultValue, readOnly],
+  );
+
+  // Force input to update when receiving change and not in focus
+  useLayoutEffect(
+    function updateNonFocusedEditor() {
+      const notFocused = !cm.current?.view.hasFocus;
+      if (notFocused && cm.current != null) {
+        updateContents(cm.current.view, defaultValue || "");
+      }
+    },
+    [defaultValue],
   );
 
   // Add bg classes to actions, so they appear over the text
   const decoratedActions = useMemo(() => {
     const results = [];
     const actionClassName = classNames(
-      'bg-surface transition-opacity transform-gpu opacity-0 group-hover:opacity-100 hover:!opacity-100 shadow',
+      "bg-surface transition-opacity transform-gpu opacity-0 group-hover:opacity-100 hover:!opacity-100 shadow",
     );
 
     if (format) {
@@ -565,17 +517,17 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
       ref={initEditorRef}
       className={classNames(
         className,
-        'cm-wrapper text-base',
-        disabled && 'opacity-disabled',
-        type === 'password' && 'cm-obscure-text',
-        heightMode === 'auto' ? 'cm-auto-height' : 'cm-full-height',
-        singleLine ? 'cm-singleline' : 'cm-multiline',
-        readOnly && 'cm-readonly',
+        "cm-wrapper text-base",
+        disabled && "opacity-disabled",
+        type === "password" && "cm-obscure-text",
+        heightMode === "auto" ? "cm-auto-height" : "cm-full-height",
+        singleLine ? "cm-singleline" : "cm-multiline",
+        readOnly && "cm-readonly",
       )}
     />
   );
 
-  if (singleLine) {
+  if (singleLine || containerOnly) {
     return cmContainer;
   }
 
@@ -587,8 +539,8 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
           space={1}
           justifyContent="end"
           className={classNames(
-            'absolute bottom-2 left-0 right-0',
-            'pointer-events-none', // No pointer events, so we don't block the editor
+            "absolute bottom-2 left-0 right-0",
+            "pointer-events-none", // No pointer events, so we don't block the editor
           )}
         >
           {decoratedActions}
@@ -596,7 +548,7 @@ export const Editor = forwardRef<EditorView | undefined, EditorProps>(function E
       )}
     </div>
   );
-});
+}
 
 function getExtensions({
   stateKey,
@@ -610,20 +562,20 @@ function getExtensions({
   onFocus,
   onBlur,
   onKeyDown,
-}: Pick<EditorProps, 'singleLine' | 'readOnly' | 'hideGutter'> & {
-  stateKey: EditorProps['stateKey'];
+}: Pick<EditorProps, "singleLine" | "readOnly" | "hideGutter"> & {
+  stateKey: EditorProps["stateKey"];
   container: HTMLDivElement | null;
-  onChange: RefObject<EditorProps['onChange']>;
-  onPaste: RefObject<EditorProps['onPaste']>;
-  onPasteOverwrite: RefObject<EditorProps['onPasteOverwrite']>;
-  onFocus: RefObject<EditorProps['onFocus']>;
-  onBlur: RefObject<EditorProps['onBlur']>;
-  onKeyDown: RefObject<EditorProps['onKeyDown']>;
+  onChange: RefObject<EditorProps["onChange"]>;
+  onPaste: RefObject<EditorProps["onPaste"]>;
+  onPasteOverwrite: RefObject<EditorProps["onPasteOverwrite"]>;
+  onFocus: RefObject<EditorProps["onFocus"]>;
+  onBlur: RefObject<EditorProps["onBlur"]>;
+  onKeyDown: RefObject<EditorProps["onKeyDown"]>;
 }) {
   // TODO: Ensure tooltips render inside the dialog if we are in one.
   const parent =
     container?.closest<HTMLDivElement>('[role="dialog"]') ??
-    document.querySelector<HTMLDivElement>('#cm-portal') ??
+    document.querySelector<HTMLDivElement>("#cm-portal") ??
     undefined;
 
   return [
@@ -635,11 +587,17 @@ function getExtensions({
       blur: () => {
         onBlur.current?.();
       },
-      keydown: (e) => {
+      keydown: (e, view) => {
+        // Check if the hotkey matches the editor.autocomplete action
+        if (eventMatchesHotkey(e, "editor.autocomplete")) {
+          e.preventDefault();
+          startCompletion(view);
+          return true;
+        }
         onKeyDown.current?.(e);
       },
       paste: (e, v) => {
-        const textData = e.clipboardData?.getData('text/plain') ?? '';
+        const textData = e.clipboardData?.getData("text/plain") ?? "";
         onPaste.current?.(textData);
         if (v.state.selection.main.from === 0 && v.state.selection.main.to === v.state.doc.length) {
           onPasteOverwrite.current?.(e, textData);
@@ -647,7 +605,7 @@ function getExtensions({
       },
     }),
     tooltips({ parent }),
-    keymap.of(singleLine ? defaultKeymap.filter((k) => k.key !== 'Enter') : defaultKeymap),
+    keymap.of(singleLine ? defaultKeymap.filter((k) => k.key !== "Enter") : defaultKeymap),
     ...(singleLine ? [singleLineExtensions()] : []),
     ...(!singleLine ? multiLineExtensions({ hideGutter }) : []),
     ...(readOnly ? readonlyExtensions : []),
@@ -656,25 +614,23 @@ function getExtensions({
     // Things that must be last //
     // ------------------------ //
 
-    // Fire onChange event
     EditorView.updateListener.of((update) => {
+      if (update.startState === update.state) return;
+
       if (onChange && update.docChanged) {
         onChange.current?.(update.state.doc.toString());
       }
-    }),
 
-    // Cache editor state
-    EditorView.updateListener.of((update) => {
       saveCachedEditorState(stateKey, update.state);
     }),
   ];
 }
 
 const placeholderElFromText = (text: string | undefined) => {
-  const el = document.createElement('div');
+  const el = document.createElement("div");
   // Default to <SPACE> because codemirror needs it for sizing. I'm not sure why, but probably something
   // to do with how Yaak "hacks" it with CSS for single line input.
-  el.innerHTML = text ? text.replaceAll('\n', '<br/>') : ' ';
+  el.innerHTML = text ? text.replaceAll("\n", "<br/>") : " ";
   return el;
 };
 
@@ -685,12 +641,12 @@ function saveCachedEditorState(stateKey: string | null, state: EditorState | nul
   // Save state in sessionStorage by removing doc and saving the hash of it instead.
   // This will be checked on restore and put back in if it matches.
   stateObj.docHash = md5(stateObj.doc);
-  delete stateObj.doc;
+  stateObj.doc = undefined;
 
   try {
     sessionStorage.setItem(computeFullStateKey(stateKey), JSON.stringify(stateObj));
   } catch (err) {
-    console.log('Failed to save to editor state', stateKey, err);
+    console.log("Failed to save to editor state", stateKey, err);
   }
 }
 
@@ -711,7 +667,7 @@ function getCachedEditorState(doc: string, stateKey: string | null) {
     state.doc = doc;
     return state;
   } catch (err) {
-    console.log('Failed to restore editor storage', stateKey, err);
+    console.log("Failed to restore editor storage", stateKey, err);
   }
 
   return null;
@@ -719,4 +675,33 @@ function getCachedEditorState(doc: string, stateKey: string | null) {
 
 function computeFullStateKey(stateKey: string): string {
   return `editor.${stateKey}`;
+}
+
+function updateContents(view: EditorView, text: string) {
+  // Replace codemirror contents
+  const currentDoc = view.state.doc.toString();
+
+  if (currentDoc === text) {
+    return;
+  }
+
+  if (text.startsWith(currentDoc)) {
+    // If we're just appending, append only the changes. This preserves
+    // things like scroll position.
+    view.dispatch({
+      changes: view.state.changes({
+        from: currentDoc.length,
+        insert: text.slice(currentDoc.length),
+      }),
+    });
+  } else {
+    // If we're replacing everything, reset the entire content
+    view.dispatch({
+      changes: view.state.changes({
+        from: 0,
+        to: currentDoc.length,
+        insert: text,
+      }),
+    });
+  }
 }

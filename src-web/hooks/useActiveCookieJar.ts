@@ -1,10 +1,10 @@
-import { useSearch } from '@tanstack/react-router';
-import type { CookieJar } from '@yaakapp-internal/models';
-import { cookieJarsAtom } from '@yaakapp-internal/models';
-import { atom, useAtomValue } from 'jotai';
-import { useEffect } from 'react';
-import { jotaiStore } from '../lib/jotai';
-import { setWorkspaceSearchParams } from '../lib/setWorkspaceSearchParams';
+import { useSearch } from "@tanstack/react-router";
+import type { CookieJar } from "@yaakapp-internal/models";
+import { cookieJarsAtom } from "@yaakapp-internal/models";
+import { atom, useAtomValue } from "jotai";
+import { useEffect } from "react";
+import { jotaiStore } from "../lib/jotai";
+import { setWorkspaceSearchParams } from "../lib/setWorkspaceSearchParams";
 
 export const activeCookieJarAtom = atom<CookieJar | null>(null);
 
@@ -19,7 +19,7 @@ export function useSubscribeActiveCookieJarId() {
 
   useEffect(() => {
     if (search == null) return; // Happens during Vite hot reload
-    const activeCookieJar = cookieJars?.find((j) => j.id == cookieJarId) ?? null;
+    const activeCookieJar = cookieJars?.find((j) => j.id === cookieJarId) ?? null;
     jotaiStore.set(activeCookieJarAtom, activeCookieJar);
   }, [cookieJarId, cookieJars, search]);
 }
@@ -30,9 +30,14 @@ export function getActiveCookieJar() {
 
 export function useEnsureActiveCookieJar() {
   const cookieJars = useAtomValue(cookieJarsAtom);
-  const { cookie_jar_id: activeCookieJarId } = useSearch({ from: '/workspaces/$workspaceId/' });
+  const { cookie_jar_id: activeCookieJarId } = useSearch({ from: "/workspaces/$workspaceId/" });
 
   // Set the active cookie jar to the first one, if none set
+  // NOTE: We only run this on cookieJars to prevent data races when switching workspaces since a lot of
+  //  things change when switching workspaces, and we don't currently have a good way to ensure that all
+  //  stores have updated.
+  // TODO: Create a global data store that can handle this case
+  // oxlint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (cookieJars == null) return; // Hasn't loaded yet
 
@@ -47,13 +52,7 @@ export function useEnsureActiveCookieJar() {
     }
 
     // There's no active jar, so set it to the first one
-    console.log('Defaulting active cookie jar to first jar', firstJar);
+    console.log("Defaulting active cookie jar to first jar", firstJar);
     setWorkspaceSearchParams({ cookie_jar_id: firstJar.id });
-
-    // NOTE: We only run this on cookieJars to prevent data races when switching workspaces since a lot of
-    //  things change when switching workspaces, and we don't currently have a good way to ensure that all
-    //  stores have updated.
-    // TODO: Create a global data store that can handle this case
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cookieJars]);
 }

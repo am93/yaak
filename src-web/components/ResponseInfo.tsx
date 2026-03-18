@@ -1,7 +1,7 @@
-import { openUrl } from '@tauri-apps/plugin-opener';
-import type { HttpResponse } from '@yaakapp-internal/models';
-import { IconButton } from './core/IconButton';
-import { KeyValueRow, KeyValueRows } from './core/KeyValueRow';
+import { openUrl } from "@tauri-apps/plugin-opener";
+import type { HttpResponse } from "@yaakapp-internal/models";
+import { IconButton } from "./core/IconButton";
+import { KeyValueRow, KeyValueRows } from "./core/KeyValueRow";
 
 interface Props {
   response: HttpResponse;
@@ -12,10 +12,10 @@ export function ResponseInfo({ response }: Props) {
     <div className="overflow-auto h-full pb-4">
       <KeyValueRows>
         <KeyValueRow labelColor="info" label="Version">
-          {response.version}
+          {response.version ?? <span className="text-text-subtlest">--</span>}
         </KeyValueRow>
         <KeyValueRow labelColor="info" label="Remote Address">
-          {response.remoteAddr}
+          {response.remoteAddr ?? <span className="text-text-subtlest">--</span>}
         </KeyValueRow>
         <KeyValueRow
           labelColor="info"

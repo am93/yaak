@@ -1,7 +1,22 @@
+import console from "node:console";
+import { type Stats, statSync, watch } from "node:fs";
+import path from "node:path";
+import type {
+  CallPromptFormDynamicArgs,
+  Context,
+  DynamicPromptFormArg,
+  PluginDefinition,
+} from "@yaakapp/api";
 import {
+  applyFormInputDefaults,
+  validateTemplateFunctionArgs,
+} from "@yaakapp-internal/lib/templateFunction";
+import type {
   BootRequest,
   DeleteKeyValueResponse,
+  DeleteModelResponse,
   FindHttpResponsesResponse,
+  Folder,
   FormInput,
   GetCookieValueRequest,
   GetCookieValueResponse,
@@ -9,38 +24,44 @@ import {
   GetKeyValueResponse,
   GrpcRequestAction,
   HttpAuthenticationAction,
+  HttpRequest,
   HttpRequestAction,
+  ImportResources,
   InternalEvent,
   InternalEventPayload,
   ListCookieNamesResponse,
-  PluginWindowContext,
+  ListFoldersResponse,
+  ListHttpRequestsRequest,
+  ListHttpRequestsResponse,
+  ListOpenWorkspacesResponse,
+  PluginContext,
+  PromptFormResponse,
   PromptTextResponse,
   RenderGrpcRequestResponse,
   RenderHttpRequestResponse,
   SendHttpRequestResponse,
   TemplateFunction,
-  TemplateFunctionArg,
+  TemplateRenderRequest,
   TemplateRenderResponse,
-} from '@yaakapp-internal/plugins';
-import { Context, PluginDefinition } from '@yaakapp/api';
-import { JsonValue } from '@yaakapp/api/lib/bindings/serde_json/JsonValue';
-import console from 'node:console';
-import { readFileSync, type Stats, statSync, watch } from 'node:fs';
-import path from 'node:path';
-import { EventChannel } from './EventChannel';
-import { migrateTemplateFunctionSelectOptions } from './migrations';
+  UpsertModelResponse,
+  WindowInfoResponse,
+} from "@yaakapp-internal/plugins";
+import { applyDynamicFormInput } from "./common";
+import { EventChannel } from "./EventChannel";
+import { migrateTemplateFunctionSelectOptions } from "./migrations";
 
 export interface PluginWorkerData {
   bootRequest: BootRequest;
   pluginRefId: string;
+  context: PluginContext;
 }
 
 export class PluginInstance {
   #workerData: PluginWorkerData;
   #mod: PluginDefinition;
-  #pkg: { name?: string; version?: string };
   #pluginToAppEvents: EventChannel;
   #appToPluginEvents: EventChannel;
+  #pendingDynamicForms = new Map<string, DynamicPromptFormArg[]>();
 
   constructor(workerData: PluginWorkerData, pluginEvents: EventChannel) {
     this.#workerData = workerData;
@@ -52,24 +73,30 @@ export class PluginInstance {
       await this.#onMessage(event);
     });
 
-    // Reload plugin if the JS or package.json changes
-    const windowContextNone: PluginWindowContext = { type: 'none' };
-
-    this.#mod = {} as any;
-    this.#pkg = JSON.parse(readFileSync(this.#pathPkg(), 'utf8'));
+    this.#mod = {};
 
     const fileChangeCallback = async () => {
-      await this.#mod?.dispose?.();
-      this.#importModule();
-      await this.#mod?.init?.(this.#newCtx({ type: 'none' }));
-      return this.#sendPayload(
-        windowContextNone,
-        {
-          type: 'reload_response',
-          silent: false,
-        },
-        null,
-      );
+      const ctx = this.#newCtx(workerData.context);
+      try {
+        await this.#mod?.dispose?.();
+        this.#importModule();
+        await this.#mod?.init?.(ctx);
+        this.#sendPayload(
+          workerData.context,
+          {
+            type: "reload_response",
+            silent: false,
+          },
+          null,
+        );
+      } catch (err: unknown) {
+        await ctx.toast.show({
+          message: `Failed to initialize plugin ${this.#workerData.bootRequest.dir.split("/").pop()}: ${err instanceof Error ? err.message : String(err)}`,
+          color: "notice",
+          icon: "alert_triangle",
+          timeout: 30000,
+        });
+      }
     };
 
     if (this.#workerData.bootRequest.watch) {
@@ -86,62 +113,62 @@ export class PluginInstance {
 
   async terminate() {
     await this.#mod?.dispose?.();
+    this.#pendingDynamicForms.clear();
     this.#unimportModule();
   }
 
   async #onMessage(event: InternalEvent) {
-    const ctx = this.#newCtx(event.windowContext);
+    const ctx = this.#newCtx(event.context);
 
-    const { windowContext, payload, id: replyId } = event;
+    const { context, payload, id: replyId } = event;
 
     try {
-      if (payload.type === 'boot_request') {
+      if (payload.type === "boot_request") {
         await this.#mod?.init?.(ctx);
-        this.#sendPayload(windowContext, { type: 'boot_response' }, replyId);
+        this.#sendPayload(context, { type: "boot_response" }, replyId);
         return;
       }
 
-      if (payload.type === 'terminate_request') {
+      if (payload.type === "terminate_request") {
         const payload: InternalEventPayload = {
-          type: 'terminate_response',
+          type: "terminate_response",
         };
         await this.terminate();
-        this.#sendPayload(windowContext, payload, replyId);
+        this.#sendPayload(context, payload, replyId);
         return;
       }
 
       if (
-        payload.type === 'import_request' &&
-        typeof this.#mod?.importer?.onImport === 'function'
+        payload.type === "import_request" &&
+        typeof this.#mod?.importer?.onImport === "function"
       ) {
         const reply = await this.#mod.importer.onImport(ctx, {
           text: payload.content,
         });
         if (reply != null) {
           const replyPayload: InternalEventPayload = {
-            type: 'import_response',
-            // deno-lint-ignore no-explicit-any
-            resources: reply.resources as any,
+            type: "import_response",
+            resources: reply.resources as ImportResources,
           };
-          this.#sendPayload(windowContext, replyPayload, replyId);
+          this.#sendPayload(context, replyPayload, replyId);
           return;
         } else {
-          // Continue, to send back an empty reply
+          // Send back an empty reply (below)
         }
       }
 
-      if (payload.type === 'filter_request' && typeof this.#mod?.filter?.onFilter === 'function') {
+      if (payload.type === "filter_request" && typeof this.#mod?.filter?.onFilter === "function") {
         const reply = await this.#mod.filter.onFilter(ctx, {
           filter: payload.filter,
           payload: payload.content,
           mimeType: payload.type,
         });
-        this.#sendPayload(windowContext, { type: 'filter_response', ...reply }, replyId);
+        this.#sendPayload(context, { type: "filter_response", ...reply }, replyId);
         return;
       }
 
       if (
-        payload.type === 'get_grpc_request_actions_request' &&
+        payload.type === "get_grpc_request_actions_request" &&
         Array.isArray(this.#mod?.grpcRequestActions)
       ) {
         const reply: GrpcRequestAction[] = this.#mod.grpcRequestActions.map((a) => ({
@@ -150,16 +177,16 @@ export class PluginInstance {
           onSelect: undefined,
         }));
         const replyPayload: InternalEventPayload = {
-          type: 'get_grpc_request_actions_response',
+          type: "get_grpc_request_actions_response",
           pluginRefId: this.#workerData.pluginRefId,
           actions: reply,
         };
-        this.#sendPayload(windowContext, replyPayload, replyId);
+        this.#sendPayload(context, replyPayload, replyId);
         return;
       }
 
       if (
-        payload.type === 'get_http_request_actions_request' &&
+        payload.type === "get_http_request_actions_request" &&
         Array.isArray(this.#mod?.httpRequestActions)
       ) {
         const reply: HttpRequestAction[] = this.#mod.httpRequestActions.map((a) => ({
@@ -168,25 +195,76 @@ export class PluginInstance {
           onSelect: undefined,
         }));
         const replyPayload: InternalEventPayload = {
-          type: 'get_http_request_actions_response',
+          type: "get_http_request_actions_response",
           pluginRefId: this.#workerData.pluginRefId,
           actions: reply,
         };
-        this.#sendPayload(windowContext, replyPayload, replyId);
-        return;
-      }
-
-      if (payload.type === 'get_themes_request' && Array.isArray(this.#mod?.themes)) {
-        const replyPayload: InternalEventPayload = {
-          type: 'get_themes_response',
-          themes: this.#mod.themes,
-        };
-        this.#sendPayload(windowContext, replyPayload, replyId);
+        this.#sendPayload(context, replyPayload, replyId);
         return;
       }
 
       if (
-        payload.type === 'get_template_function_summary_request' &&
+        payload.type === "get_websocket_request_actions_request" &&
+        Array.isArray(this.#mod?.websocketRequestActions)
+      ) {
+        const reply = this.#mod.websocketRequestActions.map((a) => ({
+          ...a,
+          onSelect: undefined,
+        }));
+        const replyPayload: InternalEventPayload = {
+          type: "get_websocket_request_actions_response",
+          pluginRefId: this.#workerData.pluginRefId,
+          actions: reply,
+        };
+        this.#sendPayload(context, replyPayload, replyId);
+        return;
+      }
+
+      if (
+        payload.type === "get_workspace_actions_request" &&
+        Array.isArray(this.#mod?.workspaceActions)
+      ) {
+        const reply = this.#mod.workspaceActions.map((a) => ({
+          ...a,
+          onSelect: undefined,
+        }));
+        const replyPayload: InternalEventPayload = {
+          type: "get_workspace_actions_response",
+          pluginRefId: this.#workerData.pluginRefId,
+          actions: reply,
+        };
+        this.#sendPayload(context, replyPayload, replyId);
+        return;
+      }
+
+      if (
+        payload.type === "get_folder_actions_request" &&
+        Array.isArray(this.#mod?.folderActions)
+      ) {
+        const reply = this.#mod.folderActions.map((a) => ({
+          ...a,
+          onSelect: undefined,
+        }));
+        const replyPayload: InternalEventPayload = {
+          type: "get_folder_actions_response",
+          pluginRefId: this.#workerData.pluginRefId,
+          actions: reply,
+        };
+        this.#sendPayload(context, replyPayload, replyId);
+        return;
+      }
+
+      if (payload.type === "get_themes_request" && Array.isArray(this.#mod?.themes)) {
+        const replyPayload: InternalEventPayload = {
+          type: "get_themes_response",
+          themes: this.#mod.themes,
+        };
+        this.#sendPayload(context, replyPayload, replyId);
+        return;
+      }
+
+      if (
+        payload.type === "get_template_function_summary_request" &&
         Array.isArray(this.#mod?.templateFunctions)
       ) {
         const functions: TemplateFunction[] = this.#mod.templateFunctions.map(
@@ -199,96 +277,82 @@ export class PluginInstance {
           },
         );
         const replyPayload: InternalEventPayload = {
-          type: 'get_template_function_summary_response',
+          type: "get_template_function_summary_response",
           pluginRefId: this.#workerData.pluginRefId,
           functions,
         };
-        this.#sendPayload(windowContext, replyPayload, replyId);
+        this.#sendPayload(context, replyPayload, replyId);
         return;
       }
 
       if (
-        payload.type === 'get_template_function_config_request' &&
+        payload.type === "get_template_function_config_request" &&
         Array.isArray(this.#mod?.templateFunctions)
       ) {
-        let templateFunction = this.#mod.templateFunctions.find((f) => f.name === payload.name);
+        const templateFunction = this.#mod.templateFunctions.find((f) => f.name === payload.name);
         if (templateFunction == null) {
-          this.#sendEmpty(windowContext, replyId);
+          this.#sendEmpty(context, replyId);
           return;
         }
 
-        templateFunction = migrateTemplateFunctionSelectOptions(templateFunction);
-        // @ts-ignore
-        delete templateFunction.onRender;
-        const resolvedArgs: TemplateFunctionArg[] = [];
-        for (const arg of templateFunction.args) {
-          if (arg && 'dynamic' in arg) {
-            const dynamicAttrs = await arg.dynamic(ctx, payload);
-            const { dynamic, ...other } = arg;
-            resolvedArgs.push({ ...other, ...dynamicAttrs } as TemplateFunctionArg);
-          } else if (arg) {
-            resolvedArgs.push(arg);
-          }
-          templateFunction.args = resolvedArgs;
-        }
+        const fn = {
+          ...migrateTemplateFunctionSelectOptions(templateFunction),
+          onRender: undefined,
+        };
+
+        payload.values = applyFormInputDefaults(fn.args, payload.values);
+        const p = { ...payload, purpose: "preview" } as const;
+        const resolvedArgs = await applyDynamicFormInput(ctx, fn.args, p);
+
         const replyPayload: InternalEventPayload = {
-          type: 'get_template_function_config_response',
+          type: "get_template_function_config_response",
           pluginRefId: this.#workerData.pluginRefId,
-          function: templateFunction,
+          function: { ...fn, args: stripDynamicCallbacks(resolvedArgs) },
         };
-        this.#sendPayload(windowContext, replyPayload, replyId);
+        this.#sendPayload(context, replyPayload, replyId);
         return;
       }
 
-      if (payload.type === 'get_http_authentication_summary_request' && this.#mod?.authentication) {
-        const { name, shortLabel, label } = this.#mod.authentication;
+      if (payload.type === "get_http_authentication_summary_request" && this.#mod?.authentication) {
         const replyPayload: InternalEventPayload = {
-          type: 'get_http_authentication_summary_response',
-          name,
-          label,
-          shortLabel,
+          type: "get_http_authentication_summary_response",
+          ...this.#mod.authentication,
         };
 
-        this.#sendPayload(windowContext, replyPayload, replyId);
+        this.#sendPayload(context, replyPayload, replyId);
         return;
       }
 
-      if (payload.type === 'get_http_authentication_config_request' && this.#mod?.authentication) {
+      if (payload.type === "get_http_authentication_config_request" && this.#mod?.authentication) {
         const { args, actions } = this.#mod.authentication;
-        const resolvedArgs: FormInput[] = [];
-        for (const v of args) {
-          if (v && 'dynamic' in v) {
-            const dynamicAttrs = await v.dynamic(ctx, payload);
-            const { dynamic, ...other } = v;
-            resolvedArgs.push({ ...other, ...dynamicAttrs } as FormInput);
-          } else if (v) {
-            resolvedArgs.push(v);
-          }
-        }
+        payload.values = applyFormInputDefaults(args, payload.values);
+        const resolvedArgs = await applyDynamicFormInput(ctx, args, payload);
         const resolvedActions: HttpAuthenticationAction[] = [];
-        for (const { onSelect, ...action } of actions ?? []) {
+        // oxlint-disable-next-line unbound-method
+        for (const { onSelect: _onSelect, ...action } of actions ?? []) {
           resolvedActions.push(action);
         }
 
         const replyPayload: InternalEventPayload = {
-          type: 'get_http_authentication_config_response',
-          args: resolvedArgs,
+          type: "get_http_authentication_config_response",
+          args: stripDynamicCallbacks(resolvedArgs),
           actions: resolvedActions,
           pluginRefId: this.#workerData.pluginRefId,
         };
 
-        this.#sendPayload(windowContext, replyPayload, replyId);
+        this.#sendPayload(context, replyPayload, replyId);
         return;
       }
 
-      if (payload.type === 'call_http_authentication_request' && this.#mod?.authentication) {
+      if (payload.type === "call_http_authentication_request" && this.#mod?.authentication) {
         const auth = this.#mod.authentication;
-        if (typeof auth?.onApply === 'function') {
-          applyFormInputDefaults(auth.args, payload.values);
+        if (typeof auth?.onApply === "function") {
+          const resolvedArgs = await applyDynamicFormInput(ctx, auth.args, payload);
+          payload.values = applyFormInputDefaults(resolvedArgs, payload.values);
           this.#sendPayload(
-            windowContext,
+            context,
             {
-              type: 'call_http_authentication_response',
+              type: "call_http_authentication_response",
               ...(await auth.onApply(ctx, payload)),
             },
             replyId,
@@ -298,65 +362,123 @@ export class PluginInstance {
       }
 
       if (
-        payload.type === 'call_http_authentication_action_request' &&
+        payload.type === "call_http_authentication_action_request" &&
         this.#mod.authentication != null
       ) {
         const action = this.#mod.authentication.actions?.[payload.index];
-        if (typeof action?.onSelect === 'function') {
+        if (typeof action?.onSelect === "function") {
           await action.onSelect(ctx, payload.args);
-          this.#sendEmpty(windowContext, replyId);
+          this.#sendEmpty(context, replyId);
           return;
         }
       }
 
       if (
-        payload.type === 'call_http_request_action_request' &&
+        payload.type === "call_http_request_action_request" &&
         Array.isArray(this.#mod.httpRequestActions)
       ) {
         const action = this.#mod.httpRequestActions[payload.index];
-        if (typeof action?.onSelect === 'function') {
+        if (typeof action?.onSelect === "function") {
           await action.onSelect(ctx, payload.args);
-          this.#sendEmpty(windowContext, replyId);
+          this.#sendEmpty(context, replyId);
           return;
         }
       }
 
       if (
-        payload.type === 'call_grpc_request_action_request' &&
+        payload.type === "call_websocket_request_action_request" &&
+        Array.isArray(this.#mod.websocketRequestActions)
+      ) {
+        const action = this.#mod.websocketRequestActions[payload.index];
+        if (typeof action?.onSelect === "function") {
+          await action.onSelect(ctx, payload.args);
+          this.#sendEmpty(context, replyId);
+          return;
+        }
+      }
+
+      if (
+        payload.type === "call_workspace_action_request" &&
+        Array.isArray(this.#mod.workspaceActions)
+      ) {
+        const action = this.#mod.workspaceActions[payload.index];
+        if (typeof action?.onSelect === "function") {
+          await action.onSelect(ctx, payload.args);
+          this.#sendEmpty(context, replyId);
+          return;
+        }
+      }
+
+      if (payload.type === "call_folder_action_request" && Array.isArray(this.#mod.folderActions)) {
+        const action = this.#mod.folderActions[payload.index];
+        if (typeof action?.onSelect === "function") {
+          await action.onSelect(ctx, payload.args);
+          this.#sendEmpty(context, replyId);
+          return;
+        }
+      }
+
+      if (
+        payload.type === "call_grpc_request_action_request" &&
         Array.isArray(this.#mod.grpcRequestActions)
       ) {
         const action = this.#mod.grpcRequestActions[payload.index];
-        if (typeof action?.onSelect === 'function') {
+        if (typeof action?.onSelect === "function") {
           await action.onSelect(ctx, payload.args);
-          this.#sendEmpty(windowContext, replyId);
+          this.#sendEmpty(context, replyId);
           return;
         }
       }
 
       if (
-        payload.type === 'call_template_function_request' &&
+        payload.type === "call_template_function_request" &&
         Array.isArray(this.#mod?.templateFunctions)
       ) {
         const fn = this.#mod.templateFunctions.find((a) => a.name === payload.name);
-        if (typeof fn?.onRender === 'function') {
-          applyFormInputDefaults(fn.args, payload.args.values);
-          try {
-            const result = await fn.onRender(ctx, payload.args);
+        if (
+          payload.args.purpose === "preview" &&
+          (fn?.previewType === "click" || fn?.previewType === "none")
+        ) {
+          // Send empty render response
+          this.#sendPayload(
+            context,
+            {
+              type: "call_template_function_response",
+              value: null,
+              error: "Live preview disabled for this function",
+            },
+            replyId,
+          );
+        } else if (typeof fn?.onRender === "function") {
+          const resolvedArgs = await applyDynamicFormInput(ctx, fn.args, payload.args);
+          const values = applyFormInputDefaults(resolvedArgs, payload.args.values);
+          const error = validateTemplateFunctionArgs(fn.name, resolvedArgs, values);
+          if (error && payload.args.purpose !== "preview") {
             this.#sendPayload(
-              windowContext,
-              {
-                type: 'call_template_function_response',
-                value: result ?? null,
-              },
+              context,
+              { type: "call_template_function_response", value: null, error },
+              replyId,
+            );
+            return;
+          }
+
+          try {
+            const result = await fn.onRender(ctx, { ...payload.args, values });
+            this.#sendPayload(
+              context,
+              { type: "call_template_function_response", value: result ?? null },
               replyId,
             );
           } catch (err) {
             this.#sendPayload(
-              windowContext,
+              context,
               {
-                type: 'call_template_function_response',
+                type: "call_template_function_response",
                 value: null,
-                error: `${err}`.replace(/^Error:\s*/g, ''),
+                error: (err instanceof Error ? err.message : String(err)).replace(
+                  /^Error:\s*/g,
+                  "",
+                ),
               },
               replyId,
             );
@@ -365,22 +487,22 @@ export class PluginInstance {
         }
       }
     } catch (err) {
-      const error = `${err}`.replace(/^Error:\s*/g, '');
-      console.log('Plugin call threw exception', payload.type, '→', error);
-      this.#sendPayload(windowContext, { type: 'error_response', error }, replyId);
+      const error = (err instanceof Error ? err.message : String(err)).replace(/^Error:\s*/g, "");
+      console.log("Plugin call threw exception", payload.type, "→", error);
+      this.#sendPayload(context, { type: "error_response", error }, replyId);
       return;
     }
 
     // No matches, so send back an empty response so the caller doesn't block forever
-    this.#sendEmpty(windowContext, replyId);
+    this.#sendEmpty(context, replyId);
   }
 
   #pathMod() {
-    return path.posix.join(this.#workerData.bootRequest.dir, 'build', 'index.js');
+    return path.posix.join(this.#workerData.bootRequest.dir, "build", "index.js");
   }
 
   #pathPkg() {
-    return path.join(this.#workerData.bootRequest.dir, 'package.json');
+    return path.join(this.#workerData.bootRequest.dir, "package.json");
   }
 
   #unimportModule() {
@@ -395,7 +517,7 @@ export class PluginInstance {
   }
 
   #buildEventToSend(
-    windowContext: PluginWindowContext,
+    context: PluginContext,
     payload: InternalEventPayload,
     replyId: string | null = null,
   ): InternalEvent {
@@ -405,16 +527,16 @@ export class PluginInstance {
       id: genId(),
       replyId,
       payload,
-      windowContext,
+      context,
     };
   }
 
   #sendPayload(
-    windowContext: PluginWindowContext,
+    context: PluginContext,
     payload: InternalEventPayload,
     replyId: string | null,
   ): string {
-    const event = this.#buildEventToSend(windowContext, payload, replyId);
+    const event = this.#buildEventToSend(context, payload, replyId);
     this.#sendEvent(event);
     return event.id;
   }
@@ -426,16 +548,16 @@ export class PluginInstance {
     this.#pluginToAppEvents.emit(event);
   }
 
-  #sendEmpty(windowContext: PluginWindowContext, replyId: string | null = null): string {
-    return this.#sendPayload(windowContext, { type: 'empty_response' }, replyId);
+  #sendEmpty(context: PluginContext, replyId: string | null = null): string {
+    return this.#sendPayload(context, { type: "empty_response" }, replyId);
   }
 
-  #sendAndWaitForReply<T extends Omit<InternalEventPayload, 'type'>>(
-    windowContext: PluginWindowContext,
+  #sendForReply<T extends Omit<InternalEventPayload, "type">>(
+    context: PluginContext,
     payload: InternalEventPayload,
   ): Promise<T> {
     // 1. Build event to send
-    const eventToSend = this.#buildEventToSend(windowContext, payload, null);
+    const eventToSend = this.#buildEventToSend(context, payload, null);
 
     // 2. Spawn listener in background
     const promise = new Promise<T>((resolve) => {
@@ -457,12 +579,12 @@ export class PluginInstance {
   }
 
   #sendAndListenForEvents(
-    windowContext: PluginWindowContext,
+    context: PluginContext,
     payload: InternalEventPayload,
     onEvent: (event: InternalEventPayload) => void,
   ): void {
     // 1. Build event to send
-    const eventToSend = this.#buildEventToSend(windowContext, payload, null);
+    const eventToSend = this.#buildEventToSend(context, payload, null);
 
     // 2. Listen for replies in the background
     this.#appToPluginEvents.listen((event: InternalEvent) => {
@@ -475,20 +597,32 @@ export class PluginInstance {
     this.#sendEvent(eventToSend);
   }
 
-  #newCtx(windowContext: PluginWindowContext): Context {
+  #newCtx(context: PluginContext): Context {
+    const _windowInfo = async () => {
+      if (context.label == null) {
+        throw new Error("Can't get window context without an active window");
+      }
+      const payload: InternalEventPayload = {
+        type: "window_info_request",
+        label: context.label,
+      };
+
+      return this.#sendForReply<WindowInfoResponse>(context, payload);
+    };
+
     return {
       clipboard: {
         copyText: async (text) => {
-          await this.#sendAndWaitForReply(windowContext, {
-            type: 'copy_text_request',
+          await this.#sendForReply(context, {
+            type: "copy_text_request",
             text,
           });
         },
       },
       toast: {
         show: async (args) => {
-          await this.#sendAndWaitForReply(windowContext, {
-            type: 'show_toast_request',
+          await this.#sendForReply(context, {
+            type: "show_toast_request",
             // Handle default here because null/undefined both convert to None in Rust translation
             timeout: args.timeout === undefined ? 5000 : args.timeout,
             ...args,
@@ -496,45 +630,123 @@ export class PluginInstance {
         },
       },
       window: {
+        requestId: async () => {
+          return (await _windowInfo()).requestId;
+        },
+        async workspaceId(): Promise<string | null> {
+          return (await _windowInfo()).workspaceId;
+        },
+        async environmentId(): Promise<string | null> {
+          return (await _windowInfo()).environmentId;
+        },
         openUrl: async ({ onNavigate, onClose, ...args }) => {
           args.label = args.label || `${Math.random()}`;
-          const payload: InternalEventPayload = { type: 'open_window_request', ...args };
+          const payload: InternalEventPayload = { type: "open_window_request", ...args };
           const onEvent = (event: InternalEventPayload) => {
-            if (event.type === 'window_navigate_event') {
+            if (event.type === "window_navigate_event") {
               onNavigate?.(event);
-            } else if (event.type === 'window_close_event') {
+            } else if (event.type === "window_close_event") {
               onClose?.();
             }
           };
-          this.#sendAndListenForEvents(windowContext, payload, onEvent);
+          this.#sendAndListenForEvents(context, payload, onEvent);
           return {
             close: () => {
               const closePayload: InternalEventPayload = {
-                type: 'close_window_request',
+                type: "close_window_request",
                 label: args.label,
               };
-              this.#sendPayload(windowContext, closePayload, null);
+              this.#sendPayload(context, closePayload, null);
             },
           };
+        },
+        openExternalUrl: async (url) => {
+          await this.#sendForReply(context, {
+            type: "open_external_url_request",
+            url,
+          });
         },
       },
       prompt: {
         text: async (args) => {
-          const reply: PromptTextResponse = await this.#sendAndWaitForReply(windowContext, {
-            type: 'prompt_text_request',
+          const reply: PromptTextResponse = await this.#sendForReply(context, {
+            type: "prompt_text_request",
             ...args,
           });
           return reply.value;
+        },
+        form: async (args) => {
+          // Resolve dynamic callbacks on initial inputs using default values
+          const defaults = applyFormInputDefaults(args.inputs, {});
+          const callArgs: CallPromptFormDynamicArgs = { values: defaults };
+          const resolvedInputs = await applyDynamicFormInput(
+            this.#newCtx(context),
+            args.inputs,
+            callArgs,
+          );
+          const strippedInputs = stripDynamicCallbacks(resolvedInputs);
+
+          // Build the event manually so we can get the event ID for keying
+          const eventToSend = this.#buildEventToSend(
+            context,
+            { type: "prompt_form_request", ...args, inputs: strippedInputs },
+            null,
+          );
+
+          // Store original inputs (with dynamic callbacks) for later resolution
+          this.#pendingDynamicForms.set(eventToSend.id, args.inputs);
+
+          const reply = await new Promise<PromptFormResponse>((resolve) => {
+            const cb = (event: InternalEvent) => {
+              if (event.replyId !== eventToSend.id) return;
+
+              if (event.payload.type === "prompt_form_response") {
+                const { done, values } = event.payload as PromptFormResponse;
+                if (done) {
+                  // Final response — resolve the promise and clean up
+                  this.#appToPluginEvents.unlisten(cb);
+                  this.#pendingDynamicForms.delete(eventToSend.id);
+                  resolve({ values } as PromptFormResponse);
+                } else {
+                  // Intermediate value change — resolve dynamic inputs and send back
+                  // Skip empty values (fired on initial mount before user interaction)
+                  const storedInputs = this.#pendingDynamicForms.get(eventToSend.id);
+                  if (storedInputs && values && Object.keys(values).length > 0) {
+                    const ctx = this.#newCtx(context);
+                    const callArgs: CallPromptFormDynamicArgs = { values };
+                    applyDynamicFormInput(ctx, storedInputs, callArgs)
+                      .then((resolvedInputs) => {
+                        const stripped = stripDynamicCallbacks(resolvedInputs);
+                        this.#sendPayload(
+                          context,
+                          { type: "prompt_form_request", ...args, inputs: stripped },
+                          eventToSend.id,
+                        );
+                      })
+                      .catch((err) => {
+                        console.error("Failed to resolve dynamic form inputs", err);
+                      });
+                  }
+                }
+              }
+            };
+            this.#appToPluginEvents.listen(cb);
+
+            // Send the initial event after we start listening (to prevent race)
+            this.#sendEvent(eventToSend);
+          });
+
+          return reply.values;
         },
       },
       httpResponse: {
         find: async (args) => {
           const payload = {
-            type: 'find_http_responses_request',
+            type: "find_http_responses_request",
             ...args,
           } as const;
-          const { httpResponses } = await this.#sendAndWaitForReply<FindHttpResponsesResponse>(
-            windowContext,
+          const { httpResponses } = await this.#sendForReply<FindHttpResponsesResponse>(
+            context,
             payload,
           );
           return httpResponses;
@@ -543,11 +755,11 @@ export class PluginInstance {
       grpcRequest: {
         render: async (args) => {
           const payload = {
-            type: 'render_grpc_request_request',
+            type: "render_grpc_request_request",
             ...args,
           } as const;
-          const { grpcRequest } = await this.#sendAndWaitForReply<RenderGrpcRequestResponse>(
-            windowContext,
+          const { grpcRequest } = await this.#sendForReply<RenderGrpcRequestResponse>(
+            context,
             payload,
           );
           return grpcRequest;
@@ -556,56 +768,140 @@ export class PluginInstance {
       httpRequest: {
         getById: async (args) => {
           const payload = {
-            type: 'get_http_request_by_id_request',
+            type: "get_http_request_by_id_request",
             ...args,
           } as const;
-          const { httpRequest } = await this.#sendAndWaitForReply<GetHttpRequestByIdResponse>(
-            windowContext,
+          const { httpRequest } = await this.#sendForReply<GetHttpRequestByIdResponse>(
+            context,
             payload,
           );
           return httpRequest;
         },
         send: async (args) => {
           const payload = {
-            type: 'send_http_request_request',
+            type: "send_http_request_request",
             ...args,
           } as const;
-          const { httpResponse } = await this.#sendAndWaitForReply<SendHttpRequestResponse>(
-            windowContext,
+          const { httpResponse } = await this.#sendForReply<SendHttpRequestResponse>(
+            context,
             payload,
           );
           return httpResponse;
         },
         render: async (args) => {
           const payload = {
-            type: 'render_http_request_request',
+            type: "render_http_request_request",
             ...args,
           } as const;
-          const { httpRequest } = await this.#sendAndWaitForReply<RenderHttpRequestResponse>(
-            windowContext,
+          const { httpRequest } = await this.#sendForReply<RenderHttpRequestResponse>(
+            context,
             payload,
           );
           return httpRequest;
+        },
+        list: async (args?: { folderId?: string }) => {
+          const payload: InternalEventPayload = {
+            type: "list_http_requests_request",
+            folderId: args?.folderId,
+          } satisfies ListHttpRequestsRequest & { type: "list_http_requests_request" };
+          const { httpRequests } = await this.#sendForReply<ListHttpRequestsResponse>(
+            context,
+            payload,
+          );
+          return httpRequests;
+        },
+        create: async (args) => {
+          const payload = {
+            type: "upsert_model_request",
+            model: {
+              name: "",
+              method: "GET",
+              ...args,
+              id: "",
+              model: "http_request",
+            },
+          } as InternalEventPayload;
+          const response = await this.#sendForReply<UpsertModelResponse>(context, payload);
+          return response.model as HttpRequest;
+        },
+        update: async (args) => {
+          const payload = {
+            type: "upsert_model_request",
+            model: {
+              model: "http_request",
+              ...args,
+            },
+          } as InternalEventPayload;
+          const response = await this.#sendForReply<UpsertModelResponse>(context, payload);
+          return response.model as HttpRequest;
+        },
+        delete: async (args) => {
+          const payload = {
+            type: "delete_model_request",
+            model: "http_request",
+            id: args.id,
+          } as InternalEventPayload;
+          const response = await this.#sendForReply<DeleteModelResponse>(context, payload);
+          return response.model as HttpRequest;
+        },
+      },
+      folder: {
+        list: async () => {
+          const payload = { type: "list_folders_request" } as const;
+          const { folders } = await this.#sendForReply<ListFoldersResponse>(context, payload);
+          return folders;
+        },
+        getById: async (args: { id: string }) => {
+          const payload = { type: "list_folders_request" } as const;
+          const { folders } = await this.#sendForReply<ListFoldersResponse>(context, payload);
+          return folders.find((f) => f.id === args.id) ?? null;
+        },
+        create: async ({ name, ...args }) => {
+          const payload = {
+            type: "upsert_model_request",
+            model: {
+              ...args,
+              name: name ?? "",
+              id: "",
+              model: "folder",
+            },
+          } as InternalEventPayload;
+          const response = await this.#sendForReply<UpsertModelResponse>(context, payload);
+          return response.model as Folder;
+        },
+        update: async (args) => {
+          const payload = {
+            type: "upsert_model_request",
+            model: {
+              model: "folder",
+              ...args,
+            },
+          } as InternalEventPayload;
+          const response = await this.#sendForReply<UpsertModelResponse>(context, payload);
+          return response.model as Folder;
+        },
+        delete: async (args: { id: string }) => {
+          const payload = {
+            type: "delete_model_request",
+            model: "folder",
+            id: args.id,
+          } as InternalEventPayload;
+          const response = await this.#sendForReply<DeleteModelResponse>(context, payload);
+          return response.model as Folder;
         },
       },
       cookies: {
         getValue: async (args: GetCookieValueRequest) => {
           const payload = {
-            type: 'get_cookie_value_request',
+            type: "get_cookie_value_request",
             ...args,
           } as const;
-          const { value } = await this.#sendAndWaitForReply<GetCookieValueResponse>(
-            windowContext,
-            payload,
-          );
+          const { value } = await this.#sendForReply<GetCookieValueResponse>(context, payload);
           return value;
         },
         listNames: async () => {
-          const payload = { type: 'list_cookie_names_request' } as const;
-          const { names } = await this.#sendAndWaitForReply<ListCookieNamesResponse>(
-            windowContext,
-            payload,
-          );
+          const payload = { type: "list_cookie_names_request" } as const;
+          const { names } = await this.#sendForReply<ListCookieNamesResponse>(context, payload);
           return names;
         },
       },
@@ -614,72 +910,88 @@ export class PluginInstance {
          * Invoke Yaak's template engine to render a value. If the value is a nested type
          * (eg. object), it will be recursively rendered.
          */
-        render: async (args) => {
-          const payload = { type: 'template_render_request', ...args } as const;
-          const result = await this.#sendAndWaitForReply<TemplateRenderResponse>(
-            windowContext,
-            payload,
-          );
+        render: async (args: TemplateRenderRequest) => {
+          const payload = { type: "template_render_request", ...args } as const;
+          const result = await this.#sendForReply<TemplateRenderResponse>(context, payload);
+          // oxlint-disable-next-line no-explicit-any -- That's okay
           return result.data as any;
         },
       },
       store: {
         get: async <T>(key: string) => {
-          const payload = { type: 'get_key_value_request', key } as const;
-          const result = await this.#sendAndWaitForReply<GetKeyValueResponse>(
-            windowContext,
-            payload,
-          );
+          const payload = { type: "get_key_value_request", key } as const;
+          const result = await this.#sendForReply<GetKeyValueResponse>(context, payload);
           return result.value ? (JSON.parse(result.value) as T) : undefined;
         },
         set: async <T>(key: string, value: T) => {
           const valueStr = JSON.stringify(value);
           const payload: InternalEventPayload = {
-            type: 'set_key_value_request',
+            type: "set_key_value_request",
             key,
             value: valueStr,
           };
-          await this.#sendAndWaitForReply<GetKeyValueResponse>(windowContext, payload);
+          await this.#sendForReply<GetKeyValueResponse>(context, payload);
         },
         delete: async (key: string) => {
-          const payload = { type: 'delete_key_value_request', key } as const;
-          const result = await this.#sendAndWaitForReply<DeleteKeyValueResponse>(
-            windowContext,
-            payload,
-          );
+          const payload = { type: "delete_key_value_request", key } as const;
+          const result = await this.#sendForReply<DeleteKeyValueResponse>(context, payload);
           return result.deleted;
         },
       },
       plugin: {
         reload: () => {
-          this.#sendPayload({ type: 'none' }, { type: 'reload_response', silent: true }, null);
+          this.#sendPayload(context, { type: "reload_response", silent: true }, null);
+        },
+      },
+      workspace: {
+        list: async () => {
+          const payload = {
+            type: "list_open_workspaces_request",
+          } as InternalEventPayload;
+          const response = await this.#sendForReply<ListOpenWorkspacesResponse>(context, payload);
+          return response.workspaces.map((w) => {
+            // Internal workspace info includes label field not in public API
+            type WorkspaceInfoInternal = typeof w & { label?: string };
+            return {
+              id: w.id,
+              name: w.name,
+              // Hide label from plugin authors, but keep it for internal routing
+              _label: (w as WorkspaceInfoInternal).label as string,
+            };
+          });
+        },
+        withContext: (workspaceHandle: { id: string; name: string; _label?: string }) => {
+          // Create a new context with the workspace's window label
+          const newContext: PluginContext = {
+            ...context,
+            label: workspaceHandle._label || null,
+            workspaceId: workspaceHandle.id,
+          };
+          return this.#newCtx(newContext);
         },
       },
     };
   }
 }
 
+function stripDynamicCallbacks(inputs: { dynamic?: unknown }[]): FormInput[] {
+  return inputs.map((input) => {
+    // oxlint-disable-next-line no-explicit-any -- stripping dynamic from union type
+    const { dynamic: _dynamic, ...rest } = input as any;
+    if ("inputs" in rest && Array.isArray(rest.inputs)) {
+      rest.inputs = stripDynamicCallbacks(rest.inputs);
+    }
+    return rest as FormInput;
+  });
+}
+
 function genId(len = 5): string {
-  const alphabet = '01234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
-  let id = '';
+  const alphabet = "01234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  let id = "";
   for (let i = 0; i < len; i++) {
     id += alphabet[Math.floor(Math.random() * alphabet.length)];
   }
   return id;
-}
-
-/** Recursively apply form input defaults to a set of values */
-function applyFormInputDefaults(
-  inputs: TemplateFunctionArg[],
-  values: { [p: string]: JsonValue | undefined },
-) {
-  for (const input of inputs) {
-    if ('inputs' in input) {
-      applyFormInputDefaults(input.inputs ?? [], values);
-    } else if ('defaultValue' in input && values[input.name] === undefined) {
-      values[input.name] = input.defaultValue;
-    }
-  }
 }
 
 const watchedFiles: Record<string, Stats | null> = {};
@@ -695,6 +1007,7 @@ function watchFile(filepath: string, cb: () => void) {
     const stat = statSync(filepath, { throwIfNoEntry: false });
     if (stat == null || stat.mtimeMs !== watchedFiles[filepath]?.mtimeMs) {
       watchedFiles[filepath] = stat ?? null;
+      console.log("[plugin-runtime] watchFile triggered", filepath);
       cb();
     }
   });

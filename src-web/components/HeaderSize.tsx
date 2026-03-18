@@ -1,18 +1,19 @@
-import { type } from '@tauri-apps/plugin-os';
-import { settingsAtom } from '@yaakapp-internal/models';
-import classNames from 'classnames';
-import { useAtomValue } from 'jotai';
-import type { CSSProperties, HTMLAttributes, ReactNode } from 'react';
-import React, { useMemo } from 'react';
-import { useIsFullscreen } from '../hooks/useIsFullscreen';
-import { HEADER_SIZE_LG, HEADER_SIZE_MD, WINDOW_CONTROLS_WIDTH } from '../lib/constants';
-import { WindowControls } from './WindowControls';
+import { type } from "@tauri-apps/plugin-os";
+import { settingsAtom } from "@yaakapp-internal/models";
+import classNames from "classnames";
+import { useAtomValue } from "jotai";
+import type { CSSProperties, HTMLAttributes, ReactNode } from "react";
+import { useMemo } from "react";
+import { useIsFullscreen } from "../hooks/useIsFullscreen";
+import { HEADER_SIZE_LG, HEADER_SIZE_MD, WINDOW_CONTROLS_WIDTH } from "../lib/constants";
+import { WindowControls } from "./WindowControls";
 
 interface HeaderSizeProps extends HTMLAttributes<HTMLDivElement> {
   children?: ReactNode;
-  size: 'md' | 'lg';
+  size: "md" | "lg";
   ignoreControlsSpacing?: boolean;
   onlyXWindowControl?: boolean;
+  hideControls?: boolean;
 }
 
 export function HeaderSize({
@@ -22,20 +23,24 @@ export function HeaderSize({
   ignoreControlsSpacing,
   onlyXWindowControl,
   children,
+  hideControls,
 }: HeaderSizeProps) {
   const settings = useAtomValue(settingsAtom);
   const isFullscreen = useIsFullscreen();
+  const nativeTitlebar = settings.useNativeTitlebar;
   const finalStyle = useMemo<CSSProperties>(() => {
     const s = { ...style };
 
     // Set the height (use min-height because scaling font size may make it larger
-    if (size === 'md') s.minHeight = HEADER_SIZE_MD;
-    if (size === 'lg') s.minHeight = HEADER_SIZE_LG;
+    if (size === "md") s.minHeight = HEADER_SIZE_MD;
+    if (size === "lg") s.minHeight = HEADER_SIZE_LG;
 
-    if (type() === 'macos') {
+    if (nativeTitlebar) {
+      // No style updates when using native titlebar
+    } else if (type() === "macos") {
       if (!isFullscreen) {
         // Add large padding for window controls
-        s.paddingLeft = 72 / settings.interfaceScale;
+        s.paddingLeft = 76 / settings.interfaceScale;
       }
     } else if (!ignoreControlsSpacing && !settings.hideWindowControls) {
       s.paddingRight = WINDOW_CONTROLS_WIDTH;
@@ -49,6 +54,7 @@ export function HeaderSize({
     settings.interfaceScale,
     size,
     style,
+    nativeTitlebar,
   ]);
 
   return (
@@ -57,17 +63,21 @@ export function HeaderSize({
       style={finalStyle}
       className={classNames(
         className,
-        'px-1', // Give it some space on either end
-        'pt-[1px]', // Make up for bottom border
-        'select-none relative',
-        'w-full border-b border-border-subtle min-w-0',
+        "pt-[1px]", // Make up for bottom border
+        "select-none relative",
+        "w-full border-b border-border-subtle min-w-0",
       )}
     >
       {/* NOTE: This needs display:grid or else the element shrinks (even though scrollable) */}
-      <div className="pointer-events-none h-full w-full overflow-x-auto hide-scrollbars grid">
+      <div
+        className={classNames(
+          "pointer-events-none h-full w-full overflow-x-auto hide-scrollbars grid",
+          "px-1", // Give it some space on either end for focus outlines
+        )}
+      >
         {children}
       </div>
-      <WindowControls onlyX={onlyXWindowControl} />
+      {!hideControls && !nativeTitlebar && <WindowControls onlyX={onlyXWindowControl} />}
     </div>
   );
 }

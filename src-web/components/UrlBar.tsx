@@ -1,30 +1,29 @@
-import type { EditorView } from '@codemirror/view';
-import type { HttpRequest } from '@yaakapp-internal/models';
-import classNames from 'classnames';
-import type { FormEvent, ReactNode } from 'react';
-import { memo, useRef, useState } from 'react';
-import { useHotKey } from '../hooks/useHotKey';
-import type { IconProps } from './core/Icon';
-import { IconButton } from './core/IconButton';
-import type { InputProps } from './core/Input';
-import { Input } from './core/Input';
-import { HStack } from './core/Stacks';
+import type { HttpRequest } from "@yaakapp-internal/models";
+import classNames from "classnames";
+import type { FormEvent, ReactNode } from "react";
+import { memo, useCallback, useRef, useState } from "react";
+import { useHotKey } from "../hooks/useHotKey";
+import type { IconProps } from "./core/Icon";
+import { IconButton } from "./core/IconButton";
+import type { InputHandle, InputProps } from "./core/Input";
+import { Input } from "./core/Input";
+import { HStack } from "./core/Stacks";
 
-type Props = Pick<HttpRequest, 'url'> & {
+type Props = Pick<HttpRequest, "url"> & {
   className?: string;
   placeholder: string;
   onSend: () => void;
   onUrlChange: (url: string) => void;
   onPaste?: (v: string) => void;
-  onPasteOverwrite?: InputProps['onPasteOverwrite'];
+  onPasteOverwrite?: InputProps["onPasteOverwrite"];
   onCancel: () => void;
-  submitIcon?: IconProps['icon'] | null;
+  submitIcon?: IconProps["icon"] | null;
   isLoading: boolean;
   forceUpdateKey: string;
   rightSlot?: ReactNode;
   leftSlot?: ReactNode;
-  autocomplete?: InputProps['autocomplete'];
-  stateKey: InputProps['stateKey'];
+  autocomplete?: InputProps["autocomplete"];
+  stateKey: InputProps["stateKey"];
 };
 
 export const UrlBar = memo(function UrlBar({
@@ -37,22 +36,22 @@ export const UrlBar = memo(function UrlBar({
   onCancel,
   onPaste,
   onPasteOverwrite,
-  submitIcon = 'send_horizontal',
+  submitIcon = "send_horizontal",
   autocomplete,
   leftSlot,
   rightSlot,
   isLoading,
   stateKey,
 }: Props) {
-  const inputRef = useRef<EditorView>(null);
+  const inputRef = useRef<InputHandle>(null);
   const [isFocused, setIsFocused] = useState<boolean>(false);
 
-  useHotKey('url_bar.focus', () => {
-    const head = inputRef.current?.state.doc.length ?? 0;
-    inputRef.current?.dispatch({
-      selection: { anchor: 0, head },
-    });
-    inputRef.current?.focus();
+  const handleInitInputRef = useCallback((h: InputHandle | null) => {
+    inputRef.current = h;
+  }, []);
+
+  useHotKey("url_bar.focus", () => {
+    inputRef.current?.selectAll();
   });
 
   const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
@@ -62,9 +61,9 @@ export const UrlBar = memo(function UrlBar({
   };
 
   return (
-    <form onSubmit={handleSubmit} className={classNames('x-theme-urlBar', className)}>
+    <form onSubmit={handleSubmit} className={classNames("x-theme-urlBar", className)}>
       <Input
-        ref={inputRef}
+        setRef={handleInitInputRef}
         autocompleteFunctions
         autocompleteVariables
         stateKey={stateKey}
@@ -97,7 +96,7 @@ export const UrlBar = memo(function UrlBar({
                   type="submit"
                   className="w-8 mr-0.5 !h-full"
                   iconColor="secondary"
-                  icon={isLoading ? 'x' : submitIcon}
+                  icon={isLoading ? "x" : submitIcon}
                   hotkeyAction="request.send"
                   onMouseDown={(e) => {
                     // Prevent the button from taking focus

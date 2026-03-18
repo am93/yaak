@@ -1,12 +1,12 @@
-import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { type } from '@tauri-apps/plugin-os';
-import { settingsAtom } from '@yaakapp-internal/models';
-import classNames from 'classnames';
-import { useAtomValue } from 'jotai';
-import React, { useState } from 'react';
-import { WINDOW_CONTROLS_WIDTH } from '../lib/constants';
-import { Button } from './core/Button';
-import { HStack } from './core/Stacks';
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { type } from "@tauri-apps/plugin-os";
+import { settingsAtom } from "@yaakapp-internal/models";
+import classNames from "classnames";
+import { useAtomValue } from "jotai";
+import { useState } from "react";
+import { WINDOW_CONTROLS_WIDTH } from "../lib/constants";
+import { Button } from "./core/Button";
+import { HStack } from "./core/Stacks";
 
 interface Props {
   className?: string;
@@ -18,13 +18,13 @@ export function WindowControls({ className, onlyX }: Props) {
   const [maximized, setMaximized] = useState<boolean>(false);
   const settings = useAtomValue(settingsAtom);
   // Never show controls on macOS or if hideWindowControls is true
-  if (type() === 'macos' || settings.hideWindowControls) {
+  if (type() === "macos" || settings.hideWindowControls || settings.useNativeTitlebar) {
     return null;
   }
 
   return (
     <HStack
-      className={classNames(className, 'ml-4 absolute right-0 top-0 bottom-0')}
+      className={classNames(className, "ml-4 absolute right-0 top-0 bottom-0")}
       justifyContent="end"
       style={{ width: WINDOW_CONTROLS_WIDTH }}
       data-tauri-drag-region
@@ -37,6 +37,7 @@ export function WindowControls({ className, onlyX }: Props) {
             onClick={() => getCurrentWebviewWindow().minimize()}
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+              <title>Minimize</title>
               <path fill="currentColor" d="M14 8v1H3V8z" />
             </svg>
           </Button>
@@ -57,6 +58,7 @@ export function WindowControls({ className, onlyX }: Props) {
           >
             {maximized ? (
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+                <title>Unmaximize</title>
                 <g fill="currentColor">
                   <path d="M3 5v9h9V5zm8 8H4V6h7z" />
                   <path fillRule="evenodd" d="M5 5h1V4h7v7h-1v1h2V3H5z" clipRule="evenodd" />
@@ -64,6 +66,7 @@ export function WindowControls({ className, onlyX }: Props) {
               </svg>
             ) : (
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+                <title>Maximize</title>
                 <path fill="currentColor" d="M3 3v10h10V3zm9 9H4V4h8z" />
               </svg>
             )}
@@ -76,6 +79,7 @@ export function WindowControls({ className, onlyX }: Props) {
         onClick={() => getCurrentWebviewWindow().close()}
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+          <title>Close</title>
           <path
             fill="currentColor"
             fillRule="evenodd"

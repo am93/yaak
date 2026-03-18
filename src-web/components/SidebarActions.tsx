@@ -1,10 +1,10 @@
-import { useMemo } from 'react';
-import { useFloatingSidebarHidden } from '../hooks/useFloatingSidebarHidden';
-import { useShouldFloatSidebar } from '../hooks/useShouldFloatSidebar';
-import { useSidebarHidden } from '../hooks/useSidebarHidden';
-import { IconButton } from './core/IconButton';
-import { HStack } from './core/Stacks';
-import { CreateDropdown } from './CreateDropdown';
+import { useMemo } from "react";
+import { useFloatingSidebarHidden } from "../hooks/useFloatingSidebarHidden";
+import { useShouldFloatSidebar } from "../hooks/useShouldFloatSidebar";
+import { useSidebarHidden } from "../hooks/useSidebarHidden";
+import { CreateDropdown } from "./CreateDropdown";
+import { IconButton } from "./core/IconButton";
+import { HStack } from "./core/Stacks";
 
 export function SidebarActions() {
   const floating = useShouldFloatSidebar();
@@ -27,8 +27,8 @@ export function SidebarActions() {
         }}
         className="pointer-events-auto"
         size="sm"
-        title="Show sidebar"
-        icon={hidden ? 'left_panel_hidden' : 'left_panel_visible'}
+        title="Toggle sidebar"
+        icon={hidden ? "left_panel_hidden" : "left_panel_visible"}
         iconColor="secondary"
       />
       <CreateDropdown hotKeyAction="model.create">
