@@ -1,11 +1,9 @@
-use crate::error::Error::{ClientError, JsonError, ServerError};
+use crate::error::Error::{ClientError, ServerError};
 use crate::error::Result;
 use chrono::{DateTime, Utc};
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
-use std::ops::Add;
-use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewWindow, is_dev};
+use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewWindow};
 use ts_rs::TS;
 use yaak_api::{ApiClientKind, yaak_api_client};
 use yaak_common::platform::get_os_str;
@@ -28,7 +26,6 @@ impl<'a, R: Runtime, M: Manager<R>> QueryManagerExt<'a, R> for M {
 
 const KV_NAMESPACE: &str = "license";
 const KV_ACTIVATION_ID_KEY: &str = "activation_id";
-const TRIAL_SECONDS: u64 = 3600 * 24 * 365 * 3;
 
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -186,19 +183,11 @@ pub async fn deactivate_license<R: Runtime>(window: &WebviewWindow<R>) -> Result
     Ok(())
 }
 
-pub async fn check_license<R: Runtime>(window: &WebviewWindow<R>) -> Result<LicenseCheckStatus> {
-    let app_version = window.app_handle().package_info().version.to_string();
-    let payload =
-        CheckActivationRequestPayload { app_platform: get_os_str().to_string(), app_version };
-    let activation_id = get_activation_id(window.app_handle()).await;
-
-    let settings = window.db().get_settings();
-    let trial_end = settings.created_at.add(Duration::from_secs(TRIAL_SECONDS)).and_utc();
-
-    let has_activation_id = !activation_id.is_empty();
-    let trial_period_active = Utc::now() < trial_end;
-
-    Ok(LicenseCheckStatus::CommercialUse)
+pub async fn check_license<R: Runtime>(_window: &WebviewWindow<R>) -> Result<LicenseCheckStatus> {
+    Ok(LicenseCheckStatus::Active {
+        period_end: DateTime::<Utc>::MAX_UTC,
+        cancel_at: None,
+    })
 
     /*match (has_activation_id, trial_period_active) {
         (false, true) => Ok(LicenseCheckStatus::Trialing { end: trial_end }),

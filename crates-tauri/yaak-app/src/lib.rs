@@ -8,7 +8,7 @@ use crate::import::import_data;
 use crate::models_ext::{BlobManagerExt, QueryManagerExt};
 use crate::notifications::YaakNotifier;
 use crate::render::{render_grpc_request, render_json_value, render_template};
-use crate::updates::{UpdateMode, UpdateTrigger, YaakUpdater};
+use crate::updates::{UpdateMode, YaakUpdater};
 use crate::uri_scheme::handle_deep_link;
 use error::Result as YaakResult;
 use eventsource_client::{EventParser, SSE};
@@ -1473,10 +1473,7 @@ async fn cmd_new_main_window(app_handle: AppHandle, url: &str) -> YaakResult<()>
 }
 
 #[tauri::command]
-async fn cmd_check_for_updates<R: Runtime>(
-    window: WebviewWindow<R>,
-    yaak_updater: State<'_, Mutex<YaakUpdater>>,
-) ->  YaakResult<bool> {
+async fn cmd_check_for_updates() -> YaakResult<bool> {
     Ok(false)
 }
 
