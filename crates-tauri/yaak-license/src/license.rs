@@ -72,9 +72,6 @@ pub struct APIErrorResponsePayload {
 #[serde(rename_all = "snake_case", tag = "status", content = "data")]
 #[ts(export, export_to = "license.ts")]
 pub enum LicenseCheckStatus {
-    // Always-on commercial license (verification disabled)
-    CommercialUse,
-
     // Local Types
     PersonalUse {
         trial_ended: DateTime<Utc>,
