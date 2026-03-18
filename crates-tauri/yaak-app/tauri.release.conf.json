@@ -1,6 +1,6 @@
 {
   "build": {
-    "features": ["updater", "license"]
+    "features": ["license"]
   },
   "app": {
     "security": {
@@ -15,9 +15,6 @@
     }
   },
   "plugins": {
-    "updater": {
-      "endpoints": ["https://update.yaak.app/check/{{target}}/{{arch}}/{{current_version}}"]
-    }
   },
   "bundle": {
     "publisher": "Yaak",
