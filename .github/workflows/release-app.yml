@@ -1,7 +1,7 @@
-name: Generate Artifacts
+name: Release App Artifacts
 on:
   push:
-    tags: [ v* ]
+    tags: [v*]
 
 jobs:
   build-artifacts:
@@ -13,59 +13,45 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: 'windows-latest'
-            args: ''
-            yaak_arch: 'x64'
+          - platform: "windows-latest"
+            args: ""
+            yaak_arch: "x64"
+            os: "windows"
+            targets: ""
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 40
     steps:
       - name: Checkout yaakapp/app
         uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
         with:
-          node-version: 22
+          node-version: "24"
+          cache: true
 
       - name: install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          # Those targets are only used on macos runners so it's in an `if` to slightly speed up windows and linux builds.
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.targets }}
 
-      - uses: actions/cache@v3
-        continue-on-error: false
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            src-tauri/target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
-
-      - name: install dependencies (windows only)
-        if: matrix.platform == 'windows-latest'
-        run: cargo install --force trusted-signing-cli
-
-      - name: Install NPM Dependencies
-        run: npm ci
+          shared-key: ci
+          cache-on-failure: true
 
       - name: Install Protoc for plugin-runtime
         uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Some things (eg. WASM package) requires building before lint will work
-      - name: Run bootstrap
-        run: npm run bootstrap
-
-      - name: Run lint
-        run: npm run lint
-
-      - name: Run tests
-        run: npm test
+      - run: vp install
+      - run: npm run bootstrap
+        env:
+          YAAK_TARGET_ARCH: ${{ matrix.yaak_arch }}
+      - run: npm run lint
+      - name: Run JS Tests
+        run: vp test
+      - name: Run Rust Tests
+        run: cargo test --all --exclude yaak-cli
 
       - name: Set version
         run: npm run replace-version
@@ -76,18 +62,29 @@ jobs:
         env:
           YAAK_TARGET_ARCH: ${{ matrix.yaak_arch }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
         with:
-          tagName: 'v__VERSION__'
-          releaseName: 'Release __VERSION__'
-
-          releaseBody: |
-            > [!IMPORTANT]
-            > The Yaak project is open source and this binaries were built by @am93.
-            
-            No release notes are available!
-
+          tagName: "v__VERSION__"
+          releaseName: "Release __VERSION__"
+          releaseBody: "[Changelog __VERSION__](https://yaak.app/blog/__VERSION__)"
           releaseDraft: true
-          prerelease: false
-          args: ${{ matrix.args }}
-          includeDebug: true
+          prerelease: true
+          args: "${{ matrix.args }} --config ./crates-tauri/yaak-app/tauri.release.conf.json"
+
+      # Build a per-machine NSIS installer for enterprise deployment (PDQ, SCCM, Intune)
+      - name: Build and upload machine-wide installer (Windows only)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        env:
+          YAAK_TARGET_ARCH: ${{ matrix.yaak_arch }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          Get-ChildItem -Recurse -Path target -File -Filter "*.exe.sig" | Remove-Item -Force
+          npx tauri bundle ${{ matrix.args }} --bundles nsis --config ./crates-tauri/yaak-app/tauri.release.conf.json --config '{"bundle":{"createUpdaterArtifacts":true,"windows":{"nsis":{"installMode":"perMachine"}}}}'
+          $setup = Get-ChildItem -Recurse -Path target -Filter "*setup*.exe" | Select-Object -First 1
+          $setupSig = "$($setup.FullName).sig"
+          $dest = $setup.FullName -replace '-setup\.exe$', '-setup-machine.exe'
+          $destSig = "$dest.sig"
+          Copy-Item $setup.FullName $dest
+          Copy-Item $setupSig $destSig
+          gh release upload "${{ github.ref_name }}" "$dest" --clobber
+          gh release upload "${{ github.ref_name }}" "$destSig" --clobber
