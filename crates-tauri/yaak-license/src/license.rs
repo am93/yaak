@@ -3,8 +3,6 @@ use crate::error::Result;
 use chrono::{DateTime, Utc};
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
-use std::ops::Add;
-use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewWindow};
 use ts_rs::TS;
 use yaak_api::{ApiClientKind, yaak_api_client};
@@ -28,7 +26,6 @@ impl<'a, R: Runtime, M: Manager<R>> QueryManagerExt<'a, R> for M {
 
 const KV_NAMESPACE: &str = "license";
 const KV_ACTIVATION_ID_KEY: &str = "activation_id";
-const TRIAL_SECONDS: u64 = 3600 * 24 * 365 * 3;
 
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
