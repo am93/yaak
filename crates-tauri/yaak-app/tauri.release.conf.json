@@ -37,9 +37,7 @@
       "entitlements": "macos/entitlements.plist",
       "frameworks": []
     },
-    "windows": {
-      "signCommand": "trusted-signing-cli -e https://eus.codesigning.azure.net/ -a Yaak -c yaakapp %1"
-    },
+    "windows": {},
     "linux": {
       "deb": {
         "desktopTemplate": "./template.desktop",
