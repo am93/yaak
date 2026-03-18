@@ -1,31 +1,35 @@
-import { type } from '@tauri-apps/plugin-os';
-import { useFonts } from '@yaakapp-internal/fonts';
-import { useLicense } from '@yaakapp-internal/license';
-import type { EditorKeymap, Settings } from '@yaakapp-internal/models';
-import { patchModel, settingsAtom } from '@yaakapp-internal/models';
-import { useAtomValue } from 'jotai';
-import React from 'react';
-import { activeWorkspaceAtom } from '../../hooks/useActiveWorkspace';
-import { clamp } from '../../lib/clamp';
-import { showConfirm } from '../../lib/confirm';
-import { CargoFeature } from '../CargoFeature';
-import { Checkbox } from '../core/Checkbox';
-import { Icon } from '../core/Icon';
-import { Link } from '../core/Link';
-import { Select } from '../core/Select';
-import { HStack, VStack } from '../core/Stacks';
+import { type } from "@tauri-apps/plugin-os";
+import { useFonts } from "@yaakapp-internal/fonts";
+import { useLicense } from "@yaakapp-internal/license";
+import type { EditorKeymap, Settings } from "@yaakapp-internal/models";
+import { patchModel, settingsAtom } from "@yaakapp-internal/models";
+import { useAtomValue } from "jotai";
+import { useState } from "react";
 
-const NULL_FONT_VALUE = '__NULL_FONT__';
+import { activeWorkspaceAtom } from "../../hooks/useActiveWorkspace";
+import { clamp } from "../../lib/clamp";
+import { showConfirm } from "../../lib/confirm";
+import { invokeCmd } from "../../lib/tauri";
+import { CargoFeature } from "../CargoFeature";
+import { Button } from "../core/Button";
+import { Checkbox } from "../core/Checkbox";
+import { Heading } from "../core/Heading";
+import { Icon } from "../core/Icon";
+import { Link } from "../core/Link";
+import { Select } from "../core/Select";
+import { HStack, VStack } from "../core/Stacks";
+
+const NULL_FONT_VALUE = "__NULL_FONT__";
 
 const fontSizeOptions = [
   8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
 ].map((n) => ({ label: `${n}`, value: `${n}` }));
 
 const keymaps: { value: EditorKeymap; label: string }[] = [
-  { value: 'default', label: 'Default' },
-  { value: 'vim', label: 'Vim' },
-  { value: 'vscode', label: 'VSCode' },
-  { value: 'emacs', label: 'Emacs' },
+  { value: "default", label: "Default" },
+  { value: "vim", label: "Vim" },
+  { value: "vscode", label: "VSCode" },
+  { value: "emacs", label: "Emacs" },
 ];
 
 export function SettingsInterface() {
@@ -39,15 +43,42 @@ export function SettingsInterface() {
 
   return (
     <VStack space={3} className="mb-4">
+      <div className="mb-3">
+        <Heading>Interface</Heading>
+        <p className="text-text-subtle">Tweak settings related to the user interface.</p>
+      </div>
+      <Select
+        name="switchWorkspaceBehavior"
+        label="Open workspace behavior"
+        size="sm"
+        help="When opening a workspace, should it open in the current window or a new window?"
+        value={
+          settings.openWorkspaceNewWindow === true
+            ? "new"
+            : settings.openWorkspaceNewWindow === false
+              ? "current"
+              : "ask"
+        }
+        onChange={async (v) => {
+          if (v === "current") await patchModel(settings, { openWorkspaceNewWindow: false });
+          else if (v === "new") await patchModel(settings, { openWorkspaceNewWindow: true });
+          else await patchModel(settings, { openWorkspaceNewWindow: null });
+        }}
+        options={[
+          { label: "Always ask", value: "ask" },
+          { label: "Open in current window", value: "current" },
+          { label: "Open in new window", value: "new" },
+        ]}
+      />
       <HStack space={2} alignItems="end">
         {fonts.data && (
           <Select
             size="sm"
             name="uiFont"
-            label="Interface Font"
+            label="Interface font"
             value={settings.interfaceFont ?? NULL_FONT_VALUE}
             options={[
-              { label: 'System Default', value: NULL_FONT_VALUE },
+              { label: "System default", value: NULL_FONT_VALUE },
               ...(fonts.data.uiFonts.map((f) => ({
                 label: f,
                 value: f,
@@ -69,10 +100,10 @@ export function SettingsInterface() {
           size="sm"
           name="interfaceFontSize"
           label="Interface Font Size"
-          defaultValue="15"
+          defaultValue="14"
           value={`${settings.interfaceFontSize}`}
           options={fontSizeOptions}
-          onChange={(v) => patchModel(settings, { interfaceFontSize: parseInt(v) })}
+          onChange={(v) => patchModel(settings, { interfaceFontSize: Number.parseInt(v, 10) })}
         />
       </HStack>
       <HStack space={2} alignItems="end">
@@ -80,10 +111,10 @@ export function SettingsInterface() {
           <Select
             size="sm"
             name="editorFont"
-            label="Editor Font"
+            label="Editor font"
             value={settings.editorFont ?? NULL_FONT_VALUE}
             options={[
-              { label: 'System Default', value: NULL_FONT_VALUE },
+              { label: "System default", value: NULL_FONT_VALUE },
               ...(fonts.data.editorFonts.map((f) => ({
                 label: f,
                 value: f,
@@ -100,11 +131,11 @@ export function SettingsInterface() {
           size="sm"
           name="editorFontSize"
           label="Editor Font Size"
-          defaultValue="13"
+          defaultValue="12"
           value={`${settings.editorFontSize}`}
           options={fontSizeOptions}
           onChange={(v) =>
-            patchModel(settings, { editorFontSize: clamp(parseInt(v) || 14, 8, 30) })
+            patchModel(settings, { editorFontSize: clamp(Number.parseInt(v, 10) || 14, 8, 30) })
           }
         />
       </HStack>
@@ -112,29 +143,31 @@ export function SettingsInterface() {
         leftSlot={<Icon icon="keyboard" color="secondary" />}
         size="sm"
         name="editorKeymap"
-        label="Editor Keymap"
+        label="Editor keymap"
         value={`${settings.editorKeymap}`}
         options={keymaps}
         onChange={(v) => patchModel(settings, { editorKeymap: v })}
       />
       <Checkbox
         checked={settings.editorSoftWrap}
-        title="Wrap Editor Lines"
+        title="Wrap editor lines"
         onChange={(editorSoftWrap) => patchModel(settings, { editorSoftWrap })}
       />
       <Checkbox
         checked={settings.coloredMethods}
-        title="Colorize Request Methods"
+        title="Colorize request methods"
         onChange={(coloredMethods) => patchModel(settings, { coloredMethods })}
       />
       <CargoFeature feature="license">
         <LicenseSettings settings={settings} />
       </CargoFeature>
 
-      {type() !== 'macos' && (
+      <NativeTitlebarSetting settings={settings} />
+
+      {type() !== "macos" && (
         <Checkbox
           checked={settings.hideWindowControls}
-          title="Hide Window Controls"
+          title="Hide window controls"
           help="Hide the close/maximize/minimize controls on Windows or Linux"
           onChange={(hideWindowControls) => patchModel(settings, { hideWindowControls })}
         />
@@ -142,9 +175,36 @@ export function SettingsInterface() {
     </VStack>
   );
 }
+
+function NativeTitlebarSetting({ settings }: { settings: Settings }) {
+  const [nativeTitlebar, setNativeTitlebar] = useState(settings.useNativeTitlebar);
+  return (
+    <div className="flex gap-1 overflow-hidden h-2xs">
+      <Checkbox
+        checked={nativeTitlebar}
+        title="Native title bar"
+        help="Use the operating system's standard title bar and window controls"
+        onChange={setNativeTitlebar}
+      />
+      {settings.useNativeTitlebar !== nativeTitlebar && (
+        <Button
+          color="primary"
+          size="2xs"
+          onClick={async () => {
+            await patchModel(settings, { useNativeTitlebar: nativeTitlebar });
+            await invokeCmd("cmd_restart");
+          }}
+        >
+          Apply and Restart
+        </Button>
+      )}
+    </div>
+  );
+}
+
 function LicenseSettings({ settings }: { settings: Settings }) {
   const license = useLicense();
-  if (license.check.data?.type !== 'personal_use') {
+  if (license.check.data?.status !== "personal_use") {
     return null;
   }
 
@@ -155,24 +215,24 @@ function LicenseSettings({ settings }: { settings: Settings }) {
       onChange={async (hideLicenseBadge) => {
         if (hideLicenseBadge) {
           const confirmed = await showConfirm({
-            id: 'hide-license-badge',
-            title: 'Confirm Personal Use',
-            confirmText: 'Confirm',
+            id: "hide-license-badge",
+            title: "Confirm Personal Use",
+            confirmText: "Confirm",
             description: (
               <VStack space={3}>
                 <p>Hey there 👋🏼</p>
                 <p>
-                  Yaak is free for personal projects and learning.{' '}
+                  Yaak is free for personal projects and learning.{" "}
                   <strong>If you’re using Yaak at work, a license is required.</strong>
                 </p>
                 <p>
-                  Licenses help keep Yaak independent and sustainable.{' '}
+                  Licenses help keep Yaak independent and sustainable.{" "}
                   <Link href="https://yaak.app/pricing?s=badge">Purchase a License →</Link>
                 </p>
               </VStack>
             ),
-            requireTyping: 'Personal Use',
-            color: 'info',
+            requireTyping: "Personal Use",
+            color: "info",
           });
           if (!confirmed) {
             return; // Cancel

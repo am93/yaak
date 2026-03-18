@@ -1,6 +1,6 @@
-import type { Theme, ThemeComponentColors } from '@yaakapp-internal/plugins';
-import { defaultDarkTheme, defaultLightTheme } from './themes';
-import { YaakColor } from './yaakColor';
+import type { Theme, ThemeComponentColors } from "@yaakapp-internal/plugins";
+import { defaultDarkTheme, defaultLightTheme } from "./themes";
+import { YaakColor } from "./yaakColor";
 
 export type YaakColors = {
   surface: YaakColor;
@@ -50,7 +50,7 @@ export type YaakTheme = {
 
 export type YaakColorKey = keyof ThemeComponentColors;
 
-type ComponentName = keyof NonNullable<YaakTheme['components']>;
+type ComponentName = keyof NonNullable<YaakTheme["components"]>;
 
 type CSSVariables = Record<YaakColorKey, string | undefined>;
 
@@ -104,11 +104,12 @@ function templateTagColorVariables(color: YaakColor | null): Partial<CSSVariable
   if (color == null) return {};
 
   return {
-    text: color.lift(0.6).css(),
+    text: color.lift(0.7).css(),
     textSubtle: color.lift(0.4).css(),
     textSubtlest: color.css(),
     surface: color.lower(0.2).translucify(0.8).css(),
-    border: color.lower(0.2).translucify(0.2).css(),
+    border: color.translucify(0.6).css(),
+    borderSubtle: color.translucify(0.8).css(),
     surfaceHighlight: color.lower(0.1).translucify(0.7).css(),
   };
 }
@@ -137,14 +138,24 @@ function bannerColorVariables(color: YaakColor | null): Partial<CSSVariables> {
   };
 }
 
+function _inputCSS(color: YaakColor | null): Partial<CSSVariables> {
+  if (color == null) return {};
+
+  const theme: Partial<ThemeComponentColors> = {
+    border: color.css(),
+  };
+
+  return theme;
+}
+
 function buttonSolidColorVariables(
   color: YaakColor | null,
-  isDefault: boolean = false,
+  isDefault = false,
 ): Partial<CSSVariables> {
   if (color == null) return {};
 
   const theme: Partial<ThemeComponentColors> = {
-    text: 'white',
+    text: "white",
     surface: color.lower(0.3).css(),
     surfaceHighlight: color.lower(0.1).css(),
     border: color.css(),
@@ -161,7 +172,7 @@ function buttonSolidColorVariables(
 
 function buttonBorderColorVariables(
   color: YaakColor | null,
-  isDefault: boolean = false,
+  isDefault = false,
 ): Partial<CSSVariables> {
   if (color == null) return {};
 
@@ -193,7 +204,7 @@ function variablesToCSS(
   const css = Object.entries(vars ?? {})
     .filter(([, value]) => value)
     .map(([name, value]) => `--${name}: ${value};`)
-    .join('\n');
+    .join("\n");
 
   return selector == null ? css : `${selector} {\n${indent(css)}\n}`;
 }
@@ -220,7 +231,7 @@ function buttonCSS(
   return [
     variablesToCSS(`.x-theme-button--solid--${color}`, buttonSolidColorVariables(yaakColor)),
     variablesToCSS(`.x-theme-button--border--${color}`, buttonBorderColorVariables(yaakColor)),
-  ].join('\n\n');
+  ].join("\n\n");
 }
 
 function bannerCSS(
@@ -234,7 +245,7 @@ function bannerCSS(
   }
 
   return [variablesToCSS(`.x-theme-banner--${color}`, bannerColorVariables(yaakColor))].join(
-    '\n\n',
+    "\n\n",
   );
 }
 
@@ -244,7 +255,7 @@ function toastCSS(theme: Theme, color: YaakColorKey, colors?: ThemeComponentColo
     return null;
   }
 
-  return [variablesToCSS(`.x-theme-toast--${color}`, toastColorVariables(yaakColor))].join('\n\n');
+  return [variablesToCSS(`.x-theme-toast--${color}`, toastColorVariables(yaakColor))].join("\n\n");
 }
 
 function templateTagCSS(
@@ -259,7 +270,7 @@ function templateTagCSS(
 
   return [
     variablesToCSS(`.x-theme-templateTag--${color}`, templateTagColorVariables(yaakColor)),
-  ].join('\n\n');
+  ].join("\n\n");
 }
 
 export function getThemeCSS(theme: Theme): string {
@@ -268,21 +279,22 @@ export function getThemeCSS(theme: Theme): string {
   theme.components.toast = theme.components.toast ?? theme.components.menu ?? {};
   const { components, id, label } = theme;
   const colors = Object.keys(theme.base).reduce((prev, key) => {
+    // oxlint-disable-next-line no-accumulating-spread
     return { ...prev, [key]: theme.base[key as YaakColorKey] };
   }, {}) as ThemeComponentColors;
 
-  let themeCSS = '';
+  let themeCSS = "";
   try {
     const baseCss = variablesToCSS(null, themeVariables(theme));
     themeCSS = [
       baseCss,
       ...Object.keys(components ?? {}).map((key) => componentCSS(theme, key as ComponentName)),
       variablesToCSS(
-        `.x-theme-button--solid--default`,
+        ".x-theme-button--solid--default",
         buttonSolidColorVariables(yc(theme, theme.base.surface), true),
       ),
       variablesToCSS(
-        `.x-theme-button--border--default`,
+        ".x-theme-button--border--default",
         buttonBorderColorVariables(yc(theme, theme.base.surface), true),
       ),
       ...Object.keys(colors ?? {}).map((key) =>
@@ -297,46 +309,46 @@ export function getThemeCSS(theme: Theme): string {
       ...Object.keys(colors ?? {}).map((key) =>
         templateTagCSS(theme, key as YaakColorKey, theme.components?.templateTag ?? colors),
       ),
-    ].join('\n\n');
+    ].join("\n\n");
   } catch (err) {
-    console.error('Failed to generate CSS', err);
+    console.error("Failed to generate CSS", err);
   }
 
-  return [`/* ${label} */`, `[data-theme="${id}"] {`, indent(themeCSS), '}'].join('\n');
+  return [`/* ${label} */`, `[data-theme="${id}"] {`, indent(themeCSS), "}"].join("\n");
 }
 
 export function addThemeStylesToDocument(rawTheme: Theme | null) {
   if (rawTheme == null) {
-    console.error('Failed to add theme styles: theme is null');
+    console.error("Failed to add theme styles: theme is null");
     return;
   }
 
   const theme = completeTheme(rawTheme);
-  let styleEl = document.head.querySelector(`style[data-theme]`);
+  let styleEl = document.head.querySelector("style[data-theme]");
   if (!styleEl) {
-    styleEl = document.createElement('style');
+    styleEl = document.createElement("style");
     document.head.appendChild(styleEl);
   }
 
-  styleEl.setAttribute('data-theme', theme.id);
-  styleEl.setAttribute('data-updated-at', new Date().toISOString());
+  styleEl.setAttribute("data-theme", theme.id);
+  styleEl.setAttribute("data-updated-at", new Date().toISOString());
   styleEl.textContent = getThemeCSS(theme);
 }
 
 export function setThemeOnDocument(theme: Theme | null) {
   if (theme == null) {
-    console.error('Failed to set theme: theme is null');
+    console.error("Failed to set theme: theme is null");
     return;
   }
 
-  document.documentElement.setAttribute('data-theme', theme.id);
+  document.documentElement.setAttribute("data-theme", theme.id);
 }
 
-export function indent(text: string, space = '    '): string {
+export function indent(text: string, space = "    "): string {
   return text
-    .split('\n')
+    .split("\n")
     .map((line) => space + line)
-    .join('\n');
+    .join("\n");
 }
 
 function yc<T extends string | null | undefined>(
@@ -344,7 +356,7 @@ function yc<T extends string | null | undefined>(
   s: T,
 ): T extends string ? YaakColor : null {
   if (s == null) return null as never;
-  return new YaakColor(s, theme.dark ? 'dark' : 'light') as never;
+  return new YaakColor(s, theme.dark ? "dark" : "light") as never;
 }
 
 export function completeTheme(theme: Theme): Theme {

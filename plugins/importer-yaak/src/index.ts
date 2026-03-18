@@ -1,9 +1,9 @@
-import type { Environment, PluginDefinition } from '@yaakapp/api';
+import type { Environment, PluginDefinition } from "@yaakapp/api";
 
 export const plugin: PluginDefinition = {
   importer: {
-    name: 'Yaak',
-    description: 'Yaak official format',
+    name: "Yaak",
+    description: "Yaak official format",
     onImport(_ctx, args) {
       return migrateImport(args.text);
     },
@@ -11,7 +11,8 @@ export const plugin: PluginDefinition = {
 };
 
 export function migrateImport(contents: string) {
-  let parsed;
+  // oxlint-disable-next-line no-explicit-any
+  let parsed: any;
   try {
     parsed = JSON.parse(contents);
   } catch {
@@ -22,24 +23,24 @@ export function migrateImport(contents: string) {
     return undefined;
   }
 
-  const isYaakExport = 'yaakSchema' in parsed;
+  const isYaakExport = "yaakSchema" in parsed;
   if (!isYaakExport) {
     return;
   }
 
   // Migrate v1 to v2 -- changes requests to httpRequests
-  if ('requests' in parsed.resources) {
+  if ("requests" in parsed.resources) {
     parsed.resources.httpRequests = parsed.resources.requests;
-    delete parsed.resources['requests'];
+    parsed.resources.requests = undefined;
   }
 
   // Migrate v2 to v3
   for (const workspace of parsed.resources.workspaces ?? []) {
-    if ('variables' in workspace) {
+    if ("variables" in workspace) {
       // Create the base environment
       const baseEnvironment: Partial<Environment> = {
-        id: `GENERATE_ID::base_env_${workspace['id']}`,
-        name: 'Global Variables',
+        id: `GENERATE_ID::base_env_${workspace.id}`,
+        name: "Global Variables",
         variables: workspace.variables,
         workspaceId: workspace.id,
       };
@@ -47,7 +48,7 @@ export function migrateImport(contents: string) {
       parsed.resources.environments.push(baseEnvironment);
 
       // Delete variables key from the workspace
-      delete workspace.variables;
+      workspace.variables = undefined;
 
       // Add environmentId to relevant environments
       for (const environment of parsed.resources.environments) {
@@ -60,22 +61,22 @@ export function migrateImport(contents: string) {
 
   // Migrate v3 to v4
   for (const environment of parsed.resources.environments ?? []) {
-    if ('environmentId' in environment) {
+    if ("environmentId" in environment) {
       environment.base = environment.environmentId == null;
-      delete environment.environmentId;
+      environment.environmentId = undefined;
     }
   }
 
   // Migrate v4 to v5
   for (const environment of parsed.resources.environments ?? []) {
-    if ('base' in environment && environment.base && environment.parentModel == null) {
-      environment.parentModel = 'workspace';
+    if ("base" in environment && environment.base && environment.parentModel == null) {
+      environment.parentModel = "workspace";
       environment.parentId = null;
-      delete environment.base;
-    } else if ('base' in environment && !environment.base && environment.parentModel == null) {
-      environment.parentModel = 'environment';
+      environment.base = undefined;
+    } else if ("base" in environment && !environment.base && environment.parentModel == null) {
+      environment.parentModel = "environment";
       environment.parentId = null;
-      delete environment.base;
+      environment.base = undefined;
     }
   }
 
@@ -83,5 +84,5 @@ export function migrateImport(contents: string) {
 }
 
 function isJSObject(obj: unknown) {
-  return Object.prototype.toString.call(obj) === '[object Object]';
+  return Object.prototype.toString.call(obj) === "[object Object]";
 }

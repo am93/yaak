@@ -1,13 +1,12 @@
 {
   "name": "@yaak/filter-xpath",
   "displayName": "XPath Filter",
-  "description": "Filter response XML data using XPath expressions",
-  "private": true,
   "version": "0.1.0",
+  "private": true,
+  "description": "Filter response XML data using XPath expressions",
   "scripts": {
     "build": "yaakcli build",
-    "dev": "yaakcli dev",
-    "lint":"tsc --noEmit && eslint . --ext .ts,.tsx"
+    "dev": "yaakcli dev"
   },
   "dependencies": {
     "@xmldom/xmldom": "^0.9.8",

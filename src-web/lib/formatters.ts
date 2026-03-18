@@ -1,36 +1,45 @@
-import xmlFormat from 'xml-formatter';
-import { invokeCmd } from './tauri';
-
-const INDENT = '  ';
+import vkBeautify from "vkbeautify";
+import { invokeCmd } from "./tauri";
 
 export async function tryFormatJson(text: string): Promise<string> {
-  if (text === '') return text;
+  if (text === "") return text;
 
   try {
-    const result = await invokeCmd<string>('cmd_format_json', { text });
+    const result = await invokeCmd<string>("cmd_format_json", { text });
     return result;
   } catch (err) {
-    console.warn('Failed to format JSON', err);
-    // Nothing
+    console.warn("Failed to format JSON", err);
   }
 
   try {
     return JSON.stringify(JSON.parse(text), null, 2);
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
   } catch (err) {
-    // Nothing
+    console.log("JSON beautify failed", err);
+  }
+
+  return text;
+}
+
+export async function tryFormatGraphql(text: string): Promise<string> {
+  if (text === "") return text;
+
+  try {
+    return await invokeCmd<string>("cmd_format_graphql", { text });
+  } catch (err) {
+    console.warn("Failed to format GraphQL", err);
   }
 
   return text;
 }
 
 export async function tryFormatXml(text: string): Promise<string> {
-  if (text === '') return text;
+  if (text === "") return text;
 
   try {
-    return xmlFormat(text, { throwOnFailure: true, strictMode: false, indentation: INDENT });
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    return vkBeautify.xml(text, "  ");
   } catch (err) {
-    return text;
+    console.warn("Failed to format XML", err);
   }
+
+  return text;
 }

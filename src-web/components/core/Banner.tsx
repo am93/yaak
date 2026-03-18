@@ -1,23 +1,24 @@
-import classNames from 'classnames';
-import type { ReactNode } from 'react';
+import classNames from "classnames";
+import type { ReactNode } from "react";
 
 export interface BannerProps {
   children: ReactNode;
   className?: string;
-  color?: 'primary' | 'secondary' | 'success' | 'notice' | 'warning' | 'danger' | 'info';
+  color?: "primary" | "secondary" | "success" | "notice" | "warning" | "danger" | "info";
 }
 
 export function Banner({ children, className, color }: BannerProps) {
   return (
-    <div className="w-full mb-auto grid grid-rows-1 max-h-full">
+    <div className="w-auto grid grid-rows-1 max-h-full flex-0">
       <div
         className={classNames(
           className,
-          color && 'bg-surface',
+          color && "bg-surface",
           `x-theme-banner--${color}`,
-          'border border-border border-dashed',
-          'px-4 py-2 rounded-lg select-auto',
-          'overflow-auto text-text',
+          "border border-border border-dashed",
+          "px-4 py-2 rounded-lg select-auto cursor-auto",
+          "overflow-auto text-text",
+          "mb-auto", // Don't stretch all the way down if the parent is in grid or flexbox
         )}
       >
         {children}

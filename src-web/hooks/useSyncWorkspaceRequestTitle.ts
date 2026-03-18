@@ -1,11 +1,13 @@
-import { setWindowTitle } from '@yaakapp-internal/mac-window';
-import { useAtomValue } from 'jotai';
-import { useEffect } from 'react';
-import { appInfo } from '../lib/appInfo';
-import { resolvedModelName } from '../lib/resolvedModelName';
-import { useActiveEnvironment } from './useActiveEnvironment';
-import { activeRequestAtom } from './useActiveRequest';
-import { activeWorkspaceAtom } from './useActiveWorkspace';
+import { setWindowTitle } from "@yaakapp-internal/mac-window";
+import { settingsAtom } from "@yaakapp-internal/models";
+import { useAtomValue } from "jotai";
+import { useEffect } from "react";
+import { appInfo } from "../lib/appInfo";
+import { jotaiStore } from "../lib/jotai";
+import { resolvedModelName } from "../lib/resolvedModelName";
+import { useActiveEnvironment } from "./useActiveEnvironment";
+import { activeRequestAtom } from "./useActiveRequest";
+import { activeWorkspaceAtom } from "./useActiveWorkspace";
 
 export function useSyncWorkspaceRequestTitle() {
   const activeWorkspace = useAtomValue(activeWorkspaceAtom);
@@ -13,11 +15,13 @@ export function useSyncWorkspaceRequestTitle() {
   const activeRequest = useAtomValue(activeRequestAtom);
 
   useEffect(() => {
-    let newTitle = activeWorkspace ? activeWorkspace.name : 'Yaak';
+    const settings = jotaiStore.get(settingsAtom);
+    let newTitle = activeWorkspace ? activeWorkspace.name : "Yaak";
     if (activeEnvironment) {
-      newTitle += ` [${activeEnvironment.name}]`;
+      newTitle += ` (${activeEnvironment.name})`;
     }
-    if (activeRequest) {
+
+    if (!settings.useNativeTitlebar && activeRequest) {
       newTitle += ` › ${resolvedModelName(activeRequest)}`;
     }
 

@@ -1,11 +1,11 @@
-import EventEmitter from 'eventemitter3';
-import { atom , useAtom } from 'jotai';
-import type { DependencyList } from 'react';
-import { useCallback, useEffect } from 'react';
+import EventEmitter from "eventemitter3";
+import { atom, useAtom } from "jotai";
+import type { DependencyList } from "react";
+import { useCallback, useEffect } from "react";
 
 type EventDataMap = {
-  'request_params.focus_value': string;
-  'request_pane.focus_tab': undefined;
+  "request_params.focus_value": string;
+  "request_pane.focus_tab": undefined;
 };
 
 export function useRequestEditorEvent<
@@ -17,7 +17,7 @@ export function useRequestEditorEvent<
     return () => {
       emitter.off(event, fn);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- We're handing deps manually
   }, deps);
 }
 
@@ -28,13 +28,13 @@ export function useRequestEditor() {
   const [urlParametersKey, setUrlParametersKey] = useAtom(urlParamsKeyAtom);
   const [urlKey, setUrlKey] = useAtom(urlKeyAtom);
   const focusParamsTab = useCallback(() => {
-    emitter.emit('request_pane.focus_tab', undefined);
+    emitter.emit("request_pane.focus_tab", undefined);
   }, []);
 
   const focusParamValue = useCallback(
     (name: string) => {
       focusParamsTab();
-      setTimeout(() => emitter.emit('request_params.focus_value', name), 50);
+      requestAnimationFrame(() => emitter.emit("request_params.focus_value", name));
     },
     [focusParamsTab],
   );

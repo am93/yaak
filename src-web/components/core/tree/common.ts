@@ -1,11 +1,14 @@
-import type { DragMoveEvent } from '@dnd-kit/core';
-import { jotaiStore } from '../../../lib/jotai';
-import { selectedIdsFamily } from './atoms';
+import { jotaiStore } from "../../../lib/jotai";
+import { collapsedFamily, selectedIdsFamily } from "./atoms";
 
 export interface TreeNode<T extends { id: string }> {
   children?: TreeNode<T>[];
   item: T;
+  hidden?: boolean;
   parent: TreeNode<T> | null;
+  depth: number;
+  draggable?: boolean;
+  localDrag?: boolean;
 }
 
 export interface SelectableTreeNode<T extends { id: string }> {
@@ -27,44 +30,55 @@ export function getSelectedItems<T extends { id: string }>(
 export function equalSubtree<T extends { id: string }>(
   a: TreeNode<T>,
   b: TreeNode<T>,
-  getKey: (t: T) => string,
+  getItemKey: (t: T) => string,
 ): boolean {
-  if (getKey(a.item) !== getKey(b.item)) return false;
+  if (getNodeKey(a, getItemKey) !== getNodeKey(b, getItemKey)) return false;
   const ak = a.children ?? [];
   const bk = b.children ?? [];
-  if (ak.length !== bk.length) return false;
+
+  if (ak.length !== bk.length) {
+    return false;
+  }
+
   for (let i = 0; i < ak.length; i++) {
-    if (!equalSubtree(ak[i]!, bk[i]!, getKey)) return false;
+    // oxlint-disable-next-line no-non-null-assertion
+    if (!equalSubtree(ak[i]!, bk[i]!, getItemKey)) return false;
   }
 
   return true;
 }
 
+export function getNodeKey<T extends { id: string }>(a: TreeNode<T>, getItemKey: (i: T) => string) {
+  return getItemKey(a.item) + a.hidden;
+}
+
 export function hasAncestor<T extends { id: string }>(node: TreeNode<T>, ancestorId: string) {
-  // Check parents recursively
   if (node.parent == null) return false;
   if (node.parent.item.id === ancestorId) return true;
+
+  // Check parents recursively
   return hasAncestor(node.parent, ancestorId);
 }
 
-export function computeSideForDragMove<T extends { id: string }>(
-  node: TreeNode<T>,
-  e: DragMoveEvent,
-): 'above' | 'below' | null {
-  if (e.over == null || e.over.id !== node.item.id) {
-    return null;
+export function isVisibleNode<T extends { id: string }>(treeId: string, node: TreeNode<T>) {
+  const collapsed = jotaiStore.get(collapsedFamily(treeId));
+  let p = node.parent;
+  while (p) {
+    if (collapsed[p.item.id]) return false; // any collapsed ancestor hides this node
+    p = p.parent;
   }
-  if (e.active.rect.current.initial == null) return null;
+  return true;
+}
 
-  const overRect = e.over.rect;
-  const activeTop =
-    e.active.rect.current.translated?.top ?? e.active.rect.current.initial.top + e.delta.y;
-  const pointerY = activeTop + e.active.rect.current.initial.height / 2;
-
-  const hoverTop = overRect.top;
-  const hoverBottom = overRect.bottom;
-  const hoverMiddleY = (hoverBottom - hoverTop) / 2;
-  const hoverClientY = pointerY - hoverTop;
-
-  return hoverClientY < hoverMiddleY ? 'above' : 'below';
+export function closestVisibleNode<T extends { id: string }>(
+  treeId: string,
+  node: TreeNode<T>,
+): TreeNode<T> | null {
+  let n: TreeNode<T> | null = node;
+  while (n) {
+    if (isVisibleNode(treeId, n) && !n.hidden) return n;
+    if (n.parent == null) return null;
+    n = n.parent;
+  }
+  return null;
 }

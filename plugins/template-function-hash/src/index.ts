@@ -1,28 +1,28 @@
-import type { CallTemplateFunctionArgs, Context, PluginDefinition } from '@yaakapp/api';
-import { createHash, createHmac } from 'node:crypto';
+import { createHash, createHmac } from "node:crypto";
+import type { CallTemplateFunctionArgs, Context, PluginDefinition } from "@yaakapp/api";
 
-const algorithms = ['md5', 'sha1', 'sha256', 'sha512'] as const;
-const encodings = ['base64', 'hex'] as const;
+const algorithms = ["md5", "sha1", "sha256", "sha512"] as const;
+const encodings = ["base64", "hex"] as const;
 
-type TemplateFunctionPlugin = NonNullable<PluginDefinition['templateFunctions']>[number];
+type TemplateFunctionPlugin = NonNullable<PluginDefinition["templateFunctions"]>[number];
 
-const hashFunctions: TemplateFunctionPlugin[] = algorithms.map(algorithm => ({
+const hashFunctions: TemplateFunctionPlugin[] = algorithms.map((algorithm) => ({
   name: `hash.${algorithm}`,
-  description: 'Hash a value to its hexidecimal representation',
+  description: "Hash a value to its hexadecimal representation",
   args: [
     {
-      type: 'text',
-      name: 'input',
-      label: 'Input',
-      placeholder: 'input text',
+      type: "text",
+      name: "input",
+      label: "Input",
+      placeholder: "input text",
       multiLine: true,
     },
     {
-      type: 'select',
-      name: 'encoding',
-      label: 'Encoding',
-      defaultValue: 'base64',
-      options: encodings.map(encoding => ({
+      type: "select",
+      name: "encoding",
+      label: "Encoding",
+      defaultValue: "base64",
+      options: encodings.map((encoding) => ({
         label: capitalize(encoding),
         value: encoding,
       })),
@@ -30,37 +30,35 @@ const hashFunctions: TemplateFunctionPlugin[] = algorithms.map(algorithm => ({
   ],
   async onRender(_ctx: Context, args: CallTemplateFunctionArgs): Promise<string | null> {
     const input = String(args.values.input);
-    const encoding = String(args.values.encoding) as typeof encodings[number];
+    const encoding = String(args.values.encoding) as (typeof encodings)[number];
 
-    return createHash(algorithm)
-      .update(input, 'utf-8')
-      .digest(encoding);
+    return createHash(algorithm).update(input, "utf-8").digest(encoding);
   },
 }));
 
-const hmacFunctions: TemplateFunctionPlugin[] = algorithms.map(algorithm => ({
+const hmacFunctions: TemplateFunctionPlugin[] = algorithms.map((algorithm) => ({
   name: `hmac.${algorithm}`,
-  description: 'Compute the HMAC of a value',
+  description: "Compute the HMAC of a value",
   args: [
     {
-      type: 'text',
-      name: 'input',
-      label: 'Input',
-      placeholder: 'input text',
+      type: "text",
+      name: "input",
+      label: "Input",
+      placeholder: "input text",
       multiLine: true,
     },
     {
-      type: 'text',
-      name: 'key',
-      label: 'Key',
+      type: "text",
+      name: "key",
+      label: "Key",
       password: true,
     },
     {
-      type: 'select',
-      name: 'encoding',
-      label: 'Encoding',
-      defaultValue: 'base64',
-      options: encodings.map(encoding => ({
+      type: "select",
+      name: "encoding",
+      label: "Encoding",
+      defaultValue: "base64",
+      options: encodings.map((encoding) => ({
         value: encoding,
         label: capitalize(encoding),
       })),
@@ -69,11 +67,9 @@ const hmacFunctions: TemplateFunctionPlugin[] = algorithms.map(algorithm => ({
   async onRender(_ctx: Context, args: CallTemplateFunctionArgs): Promise<string | null> {
     const input = String(args.values.input);
     const key = String(args.values.key);
-    const encoding = String(args.values.encoding) as typeof encodings[number];
+    const encoding = String(args.values.encoding) as (typeof encodings)[number];
 
-    return createHmac(algorithm, key, {})
-      .update(input)
-      .digest(encoding);
+    return createHmac(algorithm, key, {}).update(input).digest(encoding);
   },
 }));
 
