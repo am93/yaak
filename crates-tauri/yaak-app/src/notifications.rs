@@ -85,7 +85,7 @@ impl YaakNotifier {
         let license_check = {
             use yaak_license::{LicenseCheckStatus, check_license};
             match check_license(window).await {
-                Ok(LicenseCheckStatus::CommercialUse) => "commercial",
+                Ok(LicenseCheckStatus::Active { .. }) => "commercial",
                 Ok(LicenseCheckStatus::PersonalUse { .. }) => "personal",
                 Ok(LicenseCheckStatus::Active { .. }) => "commercial",
                 Ok(LicenseCheckStatus::PastDue { .. }) => "past_due",

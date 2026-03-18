@@ -187,7 +187,10 @@ pub async fn deactivate_license<R: Runtime>(window: &WebviewWindow<R>) -> Result
 }
 
 pub async fn check_license<R: Runtime>(_window: &WebviewWindow<R>) -> Result<LicenseCheckStatus> {
-    Ok(LicenseCheckStatus::CommercialUse)
+    Ok(LicenseCheckStatus::Active {
+        period_end: DateTime::<Utc>::MAX_UTC,
+        cancel_at: None,
+    })
 
     /*match (has_activation_id, trial_period_active) {
         (false, true) => Ok(LicenseCheckStatus::Trialing { end: trial_end }),
