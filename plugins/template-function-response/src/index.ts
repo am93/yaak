@@ -1,130 +1,233 @@
-import { DOMParser } from '@xmldom/xmldom';
 import type {
   CallTemplateFunctionArgs,
   Context,
+  DynamicTemplateFunctionArg,
   FormInput,
-  GetHttpAuthenticationConfigRequest,
   HttpResponse,
   PluginDefinition,
   RenderPurpose,
-} from '@yaakapp/api';
-import type { DynamicTemplateFunctionArg } from '@yaakapp/api/lib/plugins/TemplateFunctionPlugin';
-import { JSONPath } from 'jsonpath-plus';
-import { readFileSync } from 'node:fs';
-import xpath from 'xpath';
+} from "@yaakapp/api";
+import type { GenericCompletionOption } from "@yaakapp-internal/plugins";
+import type { JSONPathResult } from "../../template-function-json";
+import { filterJSONPath } from "../../template-function-json";
+import type { XPathResult } from "../../template-function-xml";
+import { filterXPath } from "../../template-function-xml";
 
-const BEHAVIOR_TTL = 'ttl';
-const BEHAVIOR_ALWAYS = 'always';
-const BEHAVIOR_SMART = 'smart';
+const BEHAVIOR_TTL = "ttl";
+const BEHAVIOR_ALWAYS = "always";
+const BEHAVIOR_SMART = "smart";
 
-const behaviorArg: FormInput = {
-  type: 'select',
-  name: 'behavior',
-  label: 'Sending Behavior',
-  defaultValue: 'smart',
-  options: [
-    { label: 'When no responses', value: BEHAVIOR_SMART },
-    { label: 'Always', value: BEHAVIOR_ALWAYS },
-    { label: 'When expired', value: BEHAVIOR_TTL },
+const RETURN_FIRST = "first";
+const RETURN_ALL = "all";
+const RETURN_JOIN = "join";
+
+const behaviorArgs: DynamicTemplateFunctionArg = {
+  type: "h_stack",
+  inputs: [
+    {
+      type: "select",
+      name: "behavior",
+      label: "Sending Behavior",
+      defaultValue: BEHAVIOR_SMART,
+      options: [
+        { label: "When no responses", value: BEHAVIOR_SMART },
+        { label: "Always", value: BEHAVIOR_ALWAYS },
+        { label: "When expired", value: BEHAVIOR_TTL },
+      ],
+    },
+    {
+      type: "text",
+      name: "ttl",
+      label: "TTL (seconds)",
+      placeholder: "0",
+      defaultValue: "0",
+      description:
+        'Resend the request when the latest response is older than this many seconds, or if there are no responses yet. "0" means never expires',
+      dynamic(_ctx, args) {
+        return { hidden: args.values.behavior !== BEHAVIOR_TTL };
+      },
+    },
   ],
 };
 
-const ttlArg: DynamicTemplateFunctionArg = {
-  type: 'text',
-  name: 'ttl',
-  label: 'Expiration Time (seconds)',
-  placeholder: '0',
-  description: 'Resend the request when the latest response is older than this many seconds, or if there are no responses yet.',
-  dynamic(_ctx: Context, { values }: GetHttpAuthenticationConfigRequest) {
-    const show = values.behavior === BEHAVIOR_TTL;
-    return { hidden: !show };
-  },
-};
-
 const requestArg: FormInput = {
-  type: 'http_request',
-  name: 'request',
-  label: 'Request',
+  type: "http_request",
+  name: "request",
+  label: "Request",
+  defaultValue: "", // Make it not select the active one by default
 };
 
 export const plugin: PluginDefinition = {
   templateFunctions: [
     {
-      name: 'response.header',
-      description: 'Read the value of a response header, by name',
+      name: "response.header",
+      description: "Read the value of a response header, by name",
+      previewArgs: ["header"],
       args: [
         requestArg,
+        behaviorArgs,
         {
-          type: 'text',
-          name: 'header',
-          label: 'Header Name',
-          placeholder: 'Content-Type',
+          type: "text",
+          name: "header",
+          label: "Header Name",
+          async dynamic(ctx, args) {
+            // Dynamic form config also runs during send-time rendering.
+            // Keep this preview-only to avoid side-effect request sends.
+            if (args.purpose !== "preview") return null;
+
+            const response = await getResponse(ctx, {
+              requestId: String(args.values.request || ""),
+              purpose: args.purpose,
+              behavior: args.values.behavior ? String(args.values.behavior) : null,
+              ttl: String(args.values.ttl || ""),
+            });
+
+            return {
+              placeholder: response?.headers[0]?.name,
+              completionOptions: response?.headers.map<GenericCompletionOption>((h) => ({
+                label: h.name,
+                type: "constant",
+              })),
+            };
+          },
         },
-        behaviorArg,
-        ttlArg,
       ],
       async onRender(ctx: Context, args: CallTemplateFunctionArgs): Promise<string | null> {
         if (!args.values.request || !args.values.header) return null;
 
         const response = await getResponse(ctx, {
-          requestId: String(args.values.request || ''),
+          requestId: String(args.values.request || ""),
           purpose: args.purpose,
           behavior: args.values.behavior ? String(args.values.behavior) : null,
-          ttl: String(args.values.ttl || ''),
+          ttl: String(args.values.ttl || ""),
         });
         if (response == null) return null;
 
         const header = response.headers.find(
-          (h) => h.name.toLowerCase() === String(args.values.header ?? '').toLowerCase(),
+          (h) => h.name.toLowerCase() === String(args.values.header ?? "").toLowerCase(),
         );
         return header?.value ?? null;
       },
     },
     {
-      name: 'response.body.path',
-      description: 'Access a field of the response body using JsonPath or XPath',
-      aliases: ['response'],
+      name: "response.body.path",
+      description: "Access a field of the response body using JsonPath or XPath",
+      aliases: ["response"],
+      previewArgs: ["path"],
       args: [
         requestArg,
+        behaviorArgs,
         {
-          type: 'text',
-          name: 'path',
-          label: 'JSONPath or XPath',
-          placeholder: '$.books[0].id or /books[0]/id',
+          type: "h_stack",
+          inputs: [
+            {
+              type: "select",
+              name: "result",
+              label: "Return Format",
+              defaultValue: RETURN_FIRST,
+              options: [
+                { label: "First result", value: RETURN_FIRST },
+                { label: "All results", value: RETURN_ALL },
+                { label: "Join with separator", value: RETURN_JOIN },
+              ],
+            },
+            {
+              name: "join",
+              type: "text",
+              label: "Separator",
+              optional: true,
+              defaultValue: ", ",
+              dynamic(_ctx, args) {
+                return { hidden: args.values.result !== RETURN_JOIN };
+              },
+            },
+          ],
         },
-        behaviorArg,
-        ttlArg,
+        {
+          type: "text",
+          name: "path",
+          label: "JSONPath or XPath",
+          placeholder: "$.books[0].id or /books[0]/id",
+          dynamic: async (ctx, args) => {
+            // Dynamic form config also runs during send-time rendering.
+            // Keep this preview-only to avoid side-effect request sends.
+            if (args.purpose !== "preview") return null;
+
+            const resp = await getResponse(ctx, {
+              requestId: String(args.values.request || ""),
+              purpose: "preview",
+              behavior: args.values.behavior ? String(args.values.behavior) : null,
+              ttl: String(args.values.ttl || ""),
+            });
+
+            if (resp == null) {
+              return null;
+            }
+
+            const contentType =
+              resp?.headers
+                .find((h) => h.name.toLowerCase() === "content-type")
+                ?.value.toLowerCase() ?? "";
+            if (contentType.includes("xml") || contentType?.includes("html")) {
+              return {
+                label: "XPath",
+                placeholder: "/books[0]/id",
+                description: "Enter an XPath expression used to filter the results",
+              };
+            }
+
+            return {
+              label: "JSONPath",
+              placeholder: "$.books[0].id",
+              description: "Enter a JSONPath expression used to filter the results",
+            };
+          },
+        },
       ],
       async onRender(ctx: Context, args: CallTemplateFunctionArgs): Promise<string | null> {
         if (!args.values.request || !args.values.path) return null;
 
         const response = await getResponse(ctx, {
-          requestId: String(args.values.request || ''),
+          requestId: String(args.values.request || ""),
           purpose: args.purpose,
           behavior: args.values.behavior ? String(args.values.behavior) : null,
-          ttl: String(args.values.ttl || ''),
+          ttl: String(args.values.ttl || ""),
         });
         if (response == null) return null;
 
-        if (response.bodyPath == null) {
-          return null;
-        }
-
-        let body;
-        try {
-          body = readFileSync(response.bodyPath, 'utf-8');
-        } catch {
-          return null;
-        }
+        const body = await readResponseBody(ctx, response);
+        if (body == null) return null;
 
         try {
-          return filterJSONPath(body, String(args.values.path || ''));
+          const result: JSONPathResult =
+            args.values.result === RETURN_ALL
+              ? "all"
+              : args.values.result === RETURN_JOIN
+                ? "join"
+                : "first";
+          return filterJSONPath(
+            body,
+            String(args.values.path || ""),
+            result,
+            args.values.join == null ? null : String(args.values.join),
+          );
         } catch {
           // Probably not JSON, try XPath
         }
 
         try {
-          return filterXPath(body, String(args.values.path || ''));
+          const result: XPathResult =
+            args.values.result === RETURN_ALL
+              ? "all"
+              : args.values.result === RETURN_JOIN
+                ? "join"
+                : "first";
+          return filterXPath(
+            body,
+            String(args.values.path || ""),
+            result,
+            args.values.join == null ? null : String(args.values.join),
+          );
         } catch {
           // Probably not XML
         }
@@ -133,66 +236,45 @@ export const plugin: PluginDefinition = {
       },
     },
     {
-      name: 'response.body.raw',
-      description: 'Access the entire response body, as text',
-      aliases: ['response'],
-      args: [requestArg, behaviorArg, ttlArg],
+      name: "response.body.raw",
+      description: "Access the entire response body, as text",
+      aliases: ["response"],
+      args: [requestArg, behaviorArgs],
       async onRender(ctx: Context, args: CallTemplateFunctionArgs): Promise<string | null> {
         if (!args.values.request) return null;
 
         const response = await getResponse(ctx, {
-          requestId: String(args.values.request || ''),
+          requestId: String(args.values.request || ""),
           purpose: args.purpose,
           behavior: args.values.behavior ? String(args.values.behavior) : null,
-          ttl: String(args.values.ttl || ''),
+          ttl: String(args.values.ttl || ""),
         });
         if (response == null) return null;
 
-        if (response.bodyPath == null) {
-          return null;
-        }
-
-        let body;
-        try {
-          body = readFileSync(response.bodyPath, 'utf-8');
-        } catch {
-          return null;
-        }
-
-        return body;
+        return await readResponseBody(ctx, response);
       },
     },
   ],
 };
 
-function filterJSONPath(body: string, path: string): string {
-  const parsed = JSON.parse(body);
-  const items = JSONPath({ path, json: parsed })[0];
-  if (items == null) {
-    return '';
-  }
+/**
+ * The response's body as text, or null when there is nothing to read.
+ *
+ * The host is asked for it by response id, so this works wherever the bytes
+ * happen to live — including responses it never recorded, which still get an
+ * id. A body over the runtime's size limit throws rather than coming back
+ * empty, since a template silently rendering to nothing is worse than one that
+ * says why.
+ */
+async function readResponseBody(ctx: Context, response: HttpResponse): Promise<string | null> {
+  // Belt and braces: everything reaching here came from find() or send() and so
+  // has an id. An empty one would just be an unreadable id.
+  if (!response.id) return null;
 
-  if (
-    Object.prototype.toString.call(items) === '[object Array]' ||
-    Object.prototype.toString.call(items) === '[object Object]'
-  ) {
-    return JSON.stringify(items);
-  } else {
-    return String(items);
-  }
-}
+  const body = await ctx.httpResponse.body({ responseId: response.id });
+  if (body.contentLength === 0) return null;
 
-function filterXPath(body: string, path: string): string {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const doc: any = new DOMParser().parseFromString(body, 'text/xml');
-  const items = xpath.select(path, doc, false);
-
-  if (Array.isArray(items)) {
-    return items[0] != null ? String(items[0].firstChild ?? '') : '';
-  } else {
-    // Not sure what cases this happens in (?)
-    return String(items);
-  }
+  return await body.text();
 }
 
 async function getResponse(
@@ -211,14 +293,14 @@ async function getResponse(
 ): Promise<HttpResponse | null> {
   if (!requestId) return null;
 
-  const httpRequest = await ctx.httpRequest.getById({ id: requestId ?? 'n/a' });
+  const httpRequest = await ctx.httpRequest.getById({ id: requestId ?? "n/a" });
   if (httpRequest == null) {
     return null;
   }
 
   const responses = await ctx.httpResponse.find({ requestId: httpRequest.id, limit: 1 });
 
-  if (behavior === 'never' && responses.length === 0) {
+  if (behavior === "never" && responses.length === 0) {
     return null;
   }
 
@@ -226,17 +308,18 @@ async function getResponse(
 
   // Previews happen a ton, and we don't want to send too many times on "always," so treat
   // it as "smart" during preview.
-  const finalBehavior = behavior === 'always' && purpose === 'preview' ? 'smart' : behavior;
+  const finalBehavior = behavior === "always" && purpose === "preview" ? "smart" : behavior;
 
   // Send if no responses and "smart," or "always"
   if (
-    (finalBehavior === 'smart' && response == null) ||
-    finalBehavior === 'always' ||
+    (finalBehavior === "smart" && response == null) ||
+    finalBehavior === "always" ||
     (finalBehavior === BEHAVIOR_TTL && shouldSendExpired(response, ttl))
   ) {
-    // NOTE: Render inside this conditional, or we'll get infinite recursion (render->render->...)
+    // Explicitly render the request before send (instead of relying on send() to render) so that we can
+    // preserve the render purpose.
     const renderedHttpRequest = await ctx.httpRequest.render({ httpRequest, purpose });
-    response = await ctx.httpRequest.send({ httpRequest: renderedHttpRequest });
+    response = (await ctx.httpRequest.send({ httpRequest: renderedHttpRequest })).httpResponse;
   }
 
   return response;
@@ -244,9 +327,9 @@ async function getResponse(
 
 function shouldSendExpired(response: HttpResponse | null, ttl: string | null): boolean {
   if (response == null) return true;
-  const ttlSeconds = parseInt(ttl || '0');
-  if (isNaN(ttlSeconds)) throw new Error(`Invalid TTL "${ttl}"`);
+  const ttlSeconds = Number.parseInt(ttl || "0", 10) || 0;
+  if (ttlSeconds === 0) return false;
   const nowMillis = Date.now();
-  const respMillis = new Date(response.createdAt + 'Z').getTime();
+  const respMillis = new Date(`${response.createdAt}Z`).getTime();
   return respMillis + ttlSeconds * 1000 < nowMillis;
 }

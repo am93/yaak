@@ -1,8 +1,7 @@
-import type { Context, HttpRequest } from '@yaakapp/api';
-import { readFileSync } from 'node:fs';
-import type { AccessToken, AccessTokenRawResponse, TokenStoreArgs } from './store';
-import { deleteToken, getToken, storeToken } from './store';
-import { isTokenExpired } from './util';
+import type { Context, HttpRequest } from "@yaakapp/api";
+import type { AccessToken, AccessTokenRawResponse, TokenStoreArgs } from "./store";
+import { deleteToken, getToken, storeToken } from "./store";
+import { isTokenExpired } from "./util";
 
 export async function getOrRefreshAccessToken(
   ctx: Context,
@@ -13,6 +12,7 @@ export async function getOrRefreshAccessToken(
     credentialsInBody,
     clientId,
     clientSecret,
+    tokenName,
     forceRefresh,
   }: {
     scope: string | null;
@@ -20,6 +20,7 @@ export async function getOrRefreshAccessToken(
     credentialsInBody: boolean;
     clientId: string;
     clientSecret: string;
+    tokenName?: "access_token" | "id_token";
     forceRefresh?: boolean;
   },
 ): Promise<AccessToken | null> {
@@ -28,7 +29,7 @@ export async function getOrRefreshAccessToken(
     return null;
   }
 
-  const isExpired = isTokenExpired(token);
+  const isExpired = isTokenExpired(token, tokenName);
 
   // Return the current access token if it's still valid
   if (!isExpired && !forceRefresh) {
@@ -42,54 +43,59 @@ export async function getOrRefreshAccessToken(
 
   // Access token is expired, so get a new one
   const httpRequest: Partial<HttpRequest> = {
-    method: 'POST',
+    method: "POST",
     url: accessTokenUrl,
-    bodyType: 'application/x-www-form-urlencoded',
+    bodyType: "application/x-www-form-urlencoded",
     body: {
       form: [
-        { name: 'grant_type', value: 'refresh_token' },
-        { name: 'refresh_token', value: token.response.refresh_token },
+        { name: "grant_type", value: "refresh_token" },
+        { name: "refresh_token", value: token.response.refresh_token },
       ],
     },
     headers: [
-      { name: 'User-Agent', value: 'yaak' },
-      { name: 'Accept', value: 'application/x-www-form-urlencoded, application/json' },
-      { name: 'Content-Type', value: 'application/x-www-form-urlencoded' },
+      { name: "User-Agent", value: "yaak" },
+      { name: "Accept", value: "application/x-www-form-urlencoded, application/json" },
+      { name: "Content-Type", value: "application/x-www-form-urlencoded" },
     ],
   };
 
-  if (scope) httpRequest.body!.form.push({ name: 'scope', value: scope });
+  if (scope) httpRequest.body?.form.push({ name: "scope", value: scope });
 
   if (credentialsInBody) {
-    httpRequest.body!.form.push({ name: 'client_id', value: clientId });
-    httpRequest.body!.form.push({ name: 'client_secret', value: clientSecret });
+    httpRequest.body?.form.push({ name: "client_id", value: clientId });
+    httpRequest.body?.form.push({ name: "client_secret", value: clientSecret });
   } else {
-    const value = 'Basic ' + Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
-    httpRequest.headers!.push({ name: 'Authorization', value });
+    const value = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
+    httpRequest.headers?.push({ name: "Authorization", value });
   }
 
-  httpRequest.authenticationType = 'none'; // Don't inherit workspace auth
-  const resp = await ctx.httpRequest.send({ httpRequest });
+  httpRequest.authenticationType = "none"; // Don't inherit workspace auth
+  const { httpResponse: resp, body: responseBody } = await ctx.httpRequest.send({ httpRequest });
 
-  if (resp.status === 401) {
-    // Bad refresh token, so we'll force it to fetch a fresh access token by deleting
-    // and returning null;
-    console.log('[oauth2] Unauthorized refresh_token request');
+  if (resp.error) {
+    throw new Error(`Failed to refresh access token: ${resp.error}`);
+  }
+
+  if (resp.status >= 400 && resp.status < 500) {
+    // Client errors (4xx) indicate the refresh token is invalid, expired, or revoked
+    // Delete the token and return null to trigger a fresh authorization flow
+    console.log("[oauth2] Refresh token request failed with client error, deleting token");
     await deleteToken(ctx, tokenArgs);
     return null;
   }
 
-  const body = resp.bodyPath ? readFileSync(resp.bodyPath, 'utf8') : '';
+  // Sent ad-hoc, so this body came back with the response rather than being
+  // saved anywhere to read later.
+  const body = await responseBody.text();
 
-  console.log('[oauth2] Got refresh token response', resp.status);
+  console.log("[oauth2] Got refresh token response", resp.status);
 
   if (resp.status < 200 || resp.status >= 300) {
-    throw new Error(
-      'Failed to refresh access token with status=' + resp.status + ' and body=' + body,
-    );
+    throw new Error(`Failed to refresh access token with status=${resp.status} and body=${body}`);
   }
 
-  let response;
+  // oxlint-disable-next-line no-explicit-any
+  let response: any;
   try {
     response = JSON.parse(body);
   } catch {
@@ -108,5 +114,5 @@ export async function getOrRefreshAccessToken(
     refresh_token: response.refresh_token ?? token.response.refresh_token,
   };
 
-  return storeToken(ctx, tokenArgs, newResponse);
+  return storeToken(ctx, tokenArgs, newResponse, tokenName);
 }
