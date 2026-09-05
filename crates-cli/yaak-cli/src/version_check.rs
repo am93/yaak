@@ -98,6 +98,9 @@ pub async fn maybe_check_for_updates() {
 }
 
 fn should_skip_check() -> bool {
+    // Automatic version checks against update.yaak.app are disabled in this fork.
+    return true;
+    #[allow(unreachable_code)]
     if std::env::var("YAAK_CLI_NO_UPDATE_CHECK")
         .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
     {

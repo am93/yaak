@@ -2,25 +2,18 @@
 //!
 //! This module contains all Tauri integration for the plugin system:
 //! - Plugin initialization and lifecycle management
-//! - Tauri commands for plugin search/install/uninstall
-//! - Plugin update checking
+//! - Tauri commands for plugin search/install/uninstall/update (all user-initiated)
 
 use crate::PluginContextExt;
 use crate::error::Result;
 use crate::models_ext::QueryManagerExt;
-use log::{error, info, warn};
-use serde::Serialize;
+use log::{error, info};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tauri::path::BaseDirectory;
 use tauri::plugin::{Builder, TauriPlugin};
-use tauri::{
-    AppHandle, Emitter, Manager, RunEvent, Runtime, State, WebviewWindow, WindowEvent,
-    is_dev,
-};
-use tokio::sync::Mutex;
-use ts_rs::TS;
+use tauri::{AppHandle, Emitter, Manager, RunEvent, Runtime, WebviewWindow, is_dev};
 use yaak_api::{ApiClientKind, yaak_api_client};
 use yaak_models::models::{Plugin, PluginSource};
 use yaak_models::util::UpdateSource;
@@ -32,7 +25,6 @@ use yaak_plugins::events::{Color, PluginContext, ShowToastRequest};
 use yaak_plugins::install::{delete_and_uninstall, download_and_install};
 use yaak_plugins::manager::PluginManager;
 use yaak_plugins::error::Error::PluginErr;
-use yaak_plugins::plugin_meta::get_plugin_meta;
 
 static EXITING: AtomicBool = AtomicBool::new(false);
 
@@ -66,99 +58,6 @@ pub async fn plugin_manager<R: Runtime>(
 ) -> yaak_plugins::error::Result<PluginManager> {
     let handle = manager.state::<PluginManagerHandle>().inner().clone();
     handle.get().await
-}
-
-// ============================================================================
-// Plugin Updater
-// ============================================================================
-
-const MAX_UPDATE_CHECK_HOURS: u64 = 12;
-
-pub struct PluginUpdater {
-    last_check: Option<Instant>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "index.ts")]
-pub struct PluginUpdateNotification {
-    pub update_count: usize,
-    pub plugins: Vec<PluginUpdateInfo>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "index.ts")]
-pub struct PluginUpdateInfo {
-    pub name: String,
-    pub current_version: String,
-    pub latest_version: String,
-}
-
-impl PluginUpdater {
-    pub fn new() -> Self {
-        Self { last_check: None }
-    }
-
-    pub async fn check_now<R: Runtime>(&mut self, window: &WebviewWindow<R>) -> Result<bool> {
-        self.last_check = Some(Instant::now());
-
-        info!("Checking for plugin updates");
-
-        let app_version = window.app_handle().package_info().version.to_string();
-        let http_client = yaak_api_client(ApiClientKind::App, &app_version)?;
-        let plugins = window.app_handle().db().list_plugins()?;
-        let updates = check_plugin_updates(&http_client, plugins.clone()).await?;
-
-        if updates.plugins.is_empty() {
-            info!("No plugin updates available");
-            return Ok(false);
-        }
-
-        // Get current plugin versions to build notification
-        let mut update_infos = Vec::new();
-
-        for update in &updates.plugins {
-            if let Some(plugin) = plugins.iter().find(|p| {
-                if let Ok(meta) = get_plugin_meta(&std::path::Path::new(&p.directory)) {
-                    meta.name == update.name
-                } else {
-                    false
-                }
-            }) {
-                if let Ok(meta) = get_plugin_meta(&std::path::Path::new(&plugin.directory)) {
-                    update_infos.push(PluginUpdateInfo {
-                        name: update.name.clone(),
-                        current_version: meta.version,
-                        latest_version: update.version.clone(),
-                    });
-                }
-            }
-        }
-
-        let notification =
-            PluginUpdateNotification { update_count: update_infos.len(), plugins: update_infos };
-
-        info!("Found {} plugin update(s)", notification.update_count);
-
-        if let Err(e) = window.emit_to(window.label(), "plugin_updates_available", &notification) {
-            error!("Failed to emit plugin_updates_available event: {}", e);
-        }
-
-        Ok(true)
-    }
-
-    pub async fn maybe_check<R: Runtime>(&mut self, window: &WebviewWindow<R>) -> Result<bool> {
-        let update_period_seconds = MAX_UPDATE_CHECK_HOURS * 60 * 60;
-
-        if let Some(i) = self.last_check
-            && i.elapsed().as_secs() < update_period_seconds
-        {
-            return Ok(false);
-        }
-
-        self.check_now(window).await
-    }
 }
 
 // ============================================================================
@@ -395,9 +294,6 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
                 let _ = tx.send(Some(Ok(manager)));
             });
 
-            let plugin_updater = PluginUpdater::new();
-            app_handle.manage(Mutex::new(plugin_updater));
-
             Ok(())
         })
         .on_event(|app, e| match e {
@@ -419,18 +315,8 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
                     app.exit(0);
                 });
             }
-            RunEvent::WindowEvent { event: WindowEvent::Focused(true), label, .. } => {
-                // Check for plugin updates on window focus
-                let w = app.get_webview_window(&label).unwrap();
-                let h = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(Duration::from_secs(3)).await;
-                    let val: State<'_, Mutex<PluginUpdater>> = h.state();
-                    if let Err(e) = val.lock().await.maybe_check(&w).await {
-                        warn!("Failed to check for plugin updates {e:?}");
-                    }
-                });
-            }
+            // Automatic background plugin-update checks against api.yaak.app are disabled
+            // in this fork. Manual search/install/update via the Plugins settings still work.
             _ => {}
         })
         .build()

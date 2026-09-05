@@ -40,7 +40,8 @@ impl<'a> ClientDb<'a> {
             hide_license_badge: false,
             prompt_feedback: true,
             auto_download_updates: true,
-            check_notifications: true,
+            // Default off in this fork: avoids background pings to Yaak's servers.
+            check_notifications: false,
             hotkeys: HashMap::new(),
         };
         self.upsert(&settings, &UpdateSource::Background).expect("Failed to upsert settings")

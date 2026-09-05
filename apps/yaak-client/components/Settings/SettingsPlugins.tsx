@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Plugin } from "@yaakapp-internal/models";
 import { patchModel, pluginsAtom } from "@yaakapp-internal/models";
 import type { PluginVersion } from "@yaakapp-internal/plugins";
@@ -51,6 +51,7 @@ export function SettingsPlugins({ defaultSubtab }: SettingsPluginsProps) {
   const installedPlugins = plugins.filter((p) => p.source !== "bundled");
   const createPlugin = useInstallPlugin();
   const refreshPlugins = useRefreshPlugins();
+  const checkPluginUpdatesMutation = useCheckPluginUpdates();
   return (
     <div className="h-full">
       <Tabs
@@ -107,6 +108,13 @@ export function SettingsPlugins({ defaultSubtab }: SettingsPluginsProps) {
                   title="Reload plugins"
                   spin={refreshPlugins.isPending}
                   onClick={() => refreshPlugins.mutate()}
+                />
+                <IconButton
+                  size="sm"
+                  icon="update"
+                  title="Check for plugin updates"
+                  spin={checkPluginUpdatesMutation.isPending}
+                  onClick={() => checkPluginUpdatesMutation.mutate()}
                 />
                 <IconButton
                   size="sm"
@@ -294,9 +302,12 @@ function PluginTableRow({
 function PluginSearch() {
   const [query, setQuery] = useState<string>("");
   const debouncedQuery = useDebouncedValue(query);
+  const hasQuery = debouncedQuery.trim().length > 0;
   const results = useQuery({
     queryKey: ["plugins", debouncedQuery],
     queryFn: () => searchPlugins(query),
+    // Only hits the plugin registry once the user actually types something.
+    enabled: hasQuery,
   });
 
   return (
@@ -311,7 +322,9 @@ function PluginSearch() {
         />
       </HStack>
       <div className="w-full h-full">
-        {results.data == null ? (
+        {!hasQuery ? (
+          <EmptyStateText>Type to search the plugin registry</EmptyStateText>
+        ) : results.data == null ? (
           <EmptyStateText>
             <LoadingIcon size="xl" className="text-text-subtlest" />
           </EmptyStateText>
@@ -422,5 +435,21 @@ function usePluginUpdates() {
   return useQuery({
     queryKey: ["plugin_updates", usePluginsKey()],
     queryFn: () => checkPluginUpdates(),
+    // Never fetched automatically; only populated via useCheckPluginUpdates below.
+    enabled: false,
+  });
+}
+
+// Hits the plugin registry only when the user clicks "Check for plugin updates".
+function useCheckPluginUpdates() {
+  const queryClient = useQueryClient();
+  const pluginsKey = usePluginsKey();
+  return useMutation({
+    mutationKey: ["check_plugin_updates"],
+    mutationFn: () =>
+      queryClient.fetchQuery({
+        queryKey: ["plugin_updates", pluginsKey],
+        queryFn: () => checkPluginUpdates(),
+      }),
   });
 }
